@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.5
+
+- Answered possible matches move to a collapsed **Decided** section instead of disappearing, each with your answer and a button to change it, so one answer can be changed without forgetting every decision.
+- Changing an answer to **Different people** separates the two contacts even after they were synced as one person.
+
 ## 0.3.4
 
 - **Apply changes…** is at the bottom of the review, where you finish, instead of the top.

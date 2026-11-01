@@ -118,8 +118,8 @@ def page_body(review: dict | None) -> str:
         "you click it, and kept for later checks.</p>",
         f"<p>{_counts_line(review['counts'])}</p>",
     ]
-    if review["suggestions"]:
-        parts.append(_suggestions(review["suggestions"]))
+    if review["suggestions"] or review["decided_matches"]:
+        parts.append(_suggestions(review["suggestions"], review["decided_matches"]))
     if review["duplicates"]:
         parts.append(_duplicates(review["duplicates"]))
     if review["conflicts"]:
@@ -157,7 +157,9 @@ def _copy(c: dict, heading: str) -> str:
             + "</div>")
 
 
-def _suggestions(items: list[dict]) -> str:
+def _suggestions(items: list[dict], decided: list[dict]) -> str:
+    """Pairs still to answer on top; answered ones in a collapsed section, where the answer can be changed."""
+    labels = {"same": "Same person", "different": "Different people"}
     rows = []
     for s in items:
         sides = "".join(_copy(c, c["account"]) for c in s["contacts"])
@@ -168,7 +170,19 @@ def _suggestions(items: list[dict]) -> str:
             f"<button type='button' class='match secondary' data-pair='{pair}' data-decision='different'>"
             "Different people</button></div></div>"
         )
-    return f"<section class='card'><h2>Possible matches ({len(items)})</h2>{''.join(rows)}</section>"
+    answered = []
+    for s in decided:
+        sides = "".join(_copy(c, c["account"]) for c in s["contacts"])
+        other = "different" if s["decision"] == "same" else "same"
+        answered.append(
+            f"<div class='item'><div class='pair'>{sides}</div><div class='row'><span class='muted'>You said: "
+            f"{labels[s['decision']]}.</span><button type='button' class='match secondary' data-pair='{esc(s['id'])}' "
+            f"data-decision='{other}'>Change to {labels[other]}</button></div></div>"
+        )
+    folded = (f"<details class='fold'><summary>Decided ({len(answered)})</summary>{''.join(answered)}</details>"
+              if answered else "")
+    body = "".join(rows) or "<p class='muted'>Nothing left to decide.</p>"
+    return f"<section class='card'><h2>Possible matches ({len(items)} to decide)</h2>{body}{folded}</section>"
 
 
 def _conflicts(items: list[dict]) -> str:

@@ -47,8 +47,8 @@ def build(contacts: list[Contact], accounts: list[dict], decisions: dict, base: 
     picks, skips, keeps = decisions.get("picks", {}), set(decisions.get("skips", [])), set(decisions.get("keeps", []))
     duplicates = decisions.get("duplicates", {})  # "<person>|dup:<account>" -> "merge" or "keep"
     last = _Last(base or {}, set(by_ref))
-    clusters, suggestions = match.match(contacts, set(decisions.get("same", [])) | last.links(),
-                                        set(decisions.get("different", [])))
+    same, different = set(decisions.get("same", [])), set(decisions.get("different", []))
+    clusters, suggestions = match.match(contacts, same | last.links(different), different)
     waiting = {r for pair, _ in suggestions for r in pair.split("||")}  # people a possible match holds back
     have = {a["key"]: {fold(g) for g in a["groups"]} for a in accounts}
     # Groups an account has deleted since the last apply, which other accounts still have.
@@ -62,6 +62,12 @@ def build(contacts: list[Contact], accounts: list[dict], decisions: dict, base: 
         review["suggestions"].append({
             "id": pair, "reason": reason, "contacts": [_summary(by_ref[r], names) for r in pair.split("||")],
         })
+    # Possible matches already answered, while both contacts still exist, so an answer can be changed.
+    review["decided_matches"] = [
+        {"id": pair, "decision": decision, "contacts": [_summary(by_ref[r], names) for r in pair.split("||")]}
+        for decision, pairs in (("same", same), ("different", different)) for pair in sorted(pairs)
+        if all(r in by_ref for r in pair.split("||"))
+    ]
     to_group, from_group = defaultdict(list), defaultdict(list)  # (account, folded group) -> members to add, remove
     totals = Counter()  # folded group name -> people in it after the sync
     for refs in clusters:
@@ -184,11 +190,14 @@ class _Last:
         self._cluster_of = {r: cluster for cluster in self._clusters for r in cluster}
         self._now = refs_now
 
-    def links(self) -> set[str]:
+    def links(self, different: set[str]) -> set[str]:
         """Pairs of contacts that were one person at the last apply, so changing a name or number in one
-        account doesn't split them up."""
+        account doesn't split them up. A person holding a pair since answered "different" isn't linked."""
+        apart = [set(pair.split("||")) for pair in different]
         pairs = set()
         for cluster in self._clusters:
+            if any(pair <= set(cluster) for pair in apart):
+                continue
             present = sorted(r for r in cluster if r in self._now)
             pairs |= {f"{a}||{b}" for a, b in zip(present, present[1:])}
         return pairs
