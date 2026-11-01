@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.3
+
+- Label fixes have a dropdown: pick the label for a phone number, email, address or website instead of only accepting "other". It offers the labels iCloud and Google both have, plus any label already on that value, and starts on the label another account already uses, or "other" when the only label is an odd one like "PREF".
+- Each label fix is one line for every account that needs it, instead of one line per account. Label fixes unticked in an earlier version show ticked once more.
+
 ## 0.2.2
 
 - Unticked changes move to a collapsed **Ignored** section at the bottom of the review, so the changes still waiting stay on top. Tick one there and press **Save choices** to bring it back.

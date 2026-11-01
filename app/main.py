@@ -152,7 +152,8 @@ async def review_pick(request: web.Request) -> web.Response:
 
 async def review_changes(request: web.Request) -> web.Response:
     form = await request.post()
-    review.save_changes([str(v) for v in form.getall("shown", [])], {str(v) for v in form.getall("keep", [])})
+    labels = {k.removeprefix("label:"): str(v) for k, v in form.items() if k.startswith("label:")}
+    review.save_changes([str(v) for v in form.getall("shown", [])], {str(v) for v in form.getall("keep", [])}, labels)
     request.app[STATE].flash = ("ok", "Choices saved.")
     raise go_to(request, "review")
 
@@ -371,6 +372,7 @@ ul.changes li{padding:3px 0}
 .option{display:flex;align-items:center;gap:8px;margin:6px 0}
 img.thumb{width:48px;height:48px;border-radius:50%;object-fit:cover;vertical-align:middle;margin-left:8px}
 li details{margin:2px 0 0 26px}
+select{font:inherit;padding:3px 6px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--text)}
 details.ignored{margin-top:16px}
 details.ignored>summary{cursor:pointer;font-weight:600}
 """

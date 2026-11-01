@@ -39,10 +39,12 @@ def pick(conflict: str, choice: str) -> None:
         _update(lambda d: d.setdefault("picks", {}).update({conflict: choice}))
 
 
-def save_changes(shown: list[str], kept: set[str]) -> None:
-    """Every change shown on the page that wasn't left ticked is skipped from now on."""
+def save_changes(shown: list[str], kept: set[str], labels: dict[str, str]) -> None:
+    """Every change shown on the page that wasn't left ticked is skipped from now on, and every label
+    chosen from a dropdown is kept."""
     def change(d):
         d["skips"] = sorted((set(d.get("skips", [])) - set(shown)) | (set(shown) - kept))
+        d.setdefault("picks", {}).update(labels)
     _update(change)
 
 
@@ -169,11 +171,17 @@ def _checkbox(change: dict) -> str:
     thumb = f"<img class='thumb' src='thumb/{esc(change['thumb'])}.jpg' alt=''>" if change["thumb"] else ""
     details = (f"<details><summary class='muted'>Details</summary>{esc(change['details'])}</details>"
                if change["details"] else "")
-    return (
-        f"<li><input type='hidden' name='shown' value='{esc(change['id'])}'><label>"
-        f"<input type='checkbox' name='keep' value='{esc(change['id'])}'{'' if change['skipped'] else ' checked'}> "
-        f"<span class='muted'>{esc(change['account'])}:</span> {esc(change['text'])}</label>{thumb}{details}</li>"
-    )
+    box = (f"<input type='hidden' name='shown' value='{esc(change['id'])}'><label>"
+           f"<input type='checkbox' name='keep' value='{esc(change['id'])}'{'' if change['skipped'] else ' checked'}> ")
+    if label := change.get("label"):
+        # One line for every account that needs the label; the dropdown sits outside the <label> so
+        # using it doesn't tick or untick the box.
+        options = "".join(f"<option value='{esc(v)}'{' selected' if v == label['chosen'] else ''}>{esc(text)}</option>"
+                          for v, text in label["options"])
+        return (f"<li>{box}{esc(change['text'])}:</label> <select name='label:{esc(change['id'])}'>{options}</select> "
+                f"<span class='muted'>now {esc(label['now'])}</span></li>")
+    return (f"<li>{box}<span class='muted'>{esc(change['account'])}:</span> {esc(change['text'])}</label>"
+            f"{thumb}{details}</li>")
 
 
 def _duplicates(items: list[dict]) -> str:

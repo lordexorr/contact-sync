@@ -11,6 +11,15 @@ SINGLE = {"name": "Name", "nickname": "Nickname", "company": "Company", "title":
 # Fields with any number of values, and what one value is called.
 MULTI = {"phones": "phone", "emails": "email", "addresses": "address", "urls": "website", "related": "related name"}
 MONTHS = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split()
+# Labels offered when fixing a label: only ones iCloud and Google both have. Any label already on the value
+# is offered too, so a one-sided label such as iPhone stays available.
+LABEL_CHOICES = {
+    "phones": ["mobile", "home", "work", "main", "homefax", "workfax", "pager", "other"],
+    "emails": ["home", "work", "other"],
+    "addresses": ["home", "work", "other"],
+    "urls": ["homepage", "home", "work", "other"],
+    "related": [],
+}
 
 
 def build(contacts: list[Contact], accounts: list[dict], decisions: dict) -> dict:
@@ -55,6 +64,7 @@ def build(contacts: list[Contact], accounts: list[dict], decisions: dict) -> dic
             for group in merged["groups"]:
                 if fold(group) not in has:
                     to_group[(account, fold(group))].append(merged["display"])
+        changes += _label_changes(key, members, merged, names, skips)
         if changes:
             review["people"].append({"name": merged["display"], "changes": changes})
     review["people"].sort(key=lambda p: fold(p["name"]))
@@ -106,6 +116,8 @@ def _merge(key: str, members: list[Contact], picks: dict, names: dict) -> tuple[
         merged[field] = options[chosen]["value"] if chosen else ""
     for field in MULTI:
         merged[field] = _union(members, field)
+        for v in merged[field]:  # a label picked on the review page wins
+            v.label = picks.get(f"{key}|{field}~{v.key}", v.label)
     merged["groups"] = sorted({fold(g): g for c in members for g in c.groups}.values(), key=fold)
     merged["photo"] = _merge_photo(key, members, newest, picks, names, conflicts)
     merged["display"] = (merged["name"] or merged["company"]
@@ -179,18 +191,43 @@ def _differences(key: str, account: str, account_name: str, c: Contact, merged: 
     for field, noun in MULTI.items():
         have = {v.key or fold(v.value): v for v in getattr(c, field)}
         for v in merged[field]:
-            mine = have.get(v.key)
-            if mine is None:
+            if v.key not in have:
                 text = f"Add {noun}: {v.value} ({label_text(v.label)})"
                 changes.append(_change(f"{key}|{account}|{field}+{v.key}", account_name, text, "", skips))
-            elif v.label and mine.label.lower() != v.label.lower():
-                old = "PREF" if mine.odd else label_text(mine.label)
-                text = f"Change the label of {v.value}: {old} → {label_text(v.label)}"
-                changes.append(_change(f"{key}|{account}|{field}~{v.key}", account_name, text, "", skips))
     photo = merged["photo"]
     if photo and c.photo != "?" and not (c.photo and photos.same(c.photo, photo)):
         text = "Replace the photo" if c.photo else "Add a photo"
         changes.append(_change(f"{key}|{account}|photo", account_name, text, "", skips, thumb=photo))
+    return changes
+
+
+def _label_changes(key: str, members: list[Contact], merged: dict, names: dict, skips: set) -> list[dict]:
+    """One change per value whose label isn't the same in every account that has it, with a choice of label.
+
+    The choice applies to every account, so it's one line however many accounts need it.
+    """
+    changes = []
+    for field in MULTI:
+        for v in merged[field]:
+            if not v.label:
+                continue
+            now, seen = {}, set()
+            for c in members:
+                mine = next((m for m in getattr(c, field) if (m.key or fold(m.value)) == v.key), None)
+                if mine and mine.label:
+                    seen.add(mine.label)
+                if mine and mine.label.lower() != v.label.lower():
+                    now[names[c.account]] = "PREF" if mine.odd else label_text(mine.label)
+            if not now:
+                continue
+            options = list(dict.fromkeys(LABEL_CHOICES[field] + sorted(seen, key=str.lower) + [v.label]))
+            change = _change(f"{key}|{field}~{v.key}", ", ".join(now), f"Label for {v.value}", "", skips)
+            change["label"] = {
+                "options": [(o, label_text(o)) for o in options],
+                "chosen": v.label,
+                "now": "; ".join(f"{old} in {account}" for account, old in now.items()),
+            }
+            changes.append(change)
     return changes
 
 
