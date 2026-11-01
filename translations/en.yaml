@@ -1,0 +1,13 @@
+configuration:
+  daily_check_time:
+    name: Daily check time
+    description: When the daily check runs, as HH:MM on a 24-hour clock in Home Assistant's time zone.
+  google_client_id:
+    name: Google client ID
+    description: From the OAuth client created in Google Cloud. See the Documentation tab.
+  google_client_secret:
+    name: Google client secret
+    description: From the same OAuth client.
+  icloud_accounts:
+    name: iCloud accounts
+    description: One entry per iCloud account, with a label of your choice, its Apple ID, and an app-specific password created for Contact Sync at account.apple.com.

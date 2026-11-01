@@ -1,0 +1,315 @@
+"""Contact Sync add-on: the page in Home Assistant's sidebar, and the daily check."""
+import asyncio
+import html
+import logging
+import os
+from datetime import datetime, time, timedelta
+from zoneinfo import ZoneInfo
+
+from aiohttp import web
+
+from . import check, google
+from .settings import load_options
+
+log = logging.getLogger("contact_sync")
+
+PORT = 8099
+INGRESS_PROXY = "172.30.32.2"
+esc = html.escape
+
+
+class State:
+    """What the page keeps between requests."""
+
+    def __init__(self, options: dict, tz: ZoneInfo):
+        self.options = options
+        self.tz = tz
+        hour, minute = options["daily_check_time"].split(":")
+        self.check_time = time(int(hour), int(minute))
+        self.check_task: asyncio.Task | None = None
+        self.check_error: str | None = None
+        self.google_sign_in: dict | None = None
+        self.flash: tuple[str, str] | None = None
+
+    @property
+    def checking(self) -> bool:
+        return self.check_task is not None and not self.check_task.done()
+
+    @property
+    def google_configured(self) -> bool:
+        return bool(self.options["google_client_id"] and self.options["google_client_secret"])
+
+
+STATE = web.AppKey("state", State)
+
+
+@web.middleware
+async def ingress_only(request: web.Request, handler):
+    # Home Assistant's ingress proxy is the only client this page should ever have.
+    if request.remote != INGRESS_PROXY:
+        raise web.HTTPForbidden()
+    return await handler(request)
+
+
+def home_tz() -> ZoneInfo:
+    """Home Assistant's time zone, which the Supervisor passes to every add-on as TZ."""
+    try:
+        return ZoneInfo(os.environ["TZ"])
+    except Exception:  # missing, or not a zone name tzdata knows
+        log.warning("TZ isn't a usable time zone (%r); using UTC", os.environ.get("TZ"))
+        return ZoneInfo("UTC")
+
+
+def next_check_at(state: State) -> datetime:
+    now = datetime.now(state.tz)
+    day = now.date() if now.time() < state.check_time else now.date() + timedelta(days=1)
+    return datetime.combine(day, state.check_time, tzinfo=state.tz)
+
+
+def start_check(state: State) -> None:
+    if not state.checking:
+        state.check_error = None
+        state.check_task = asyncio.create_task(asyncio.to_thread(check.run_check, state.options))
+        state.check_task.add_done_callback(lambda task: _record_failure(state, task))
+
+
+def _record_failure(state: State, task: asyncio.Task) -> None:
+    if task.cancelled() or task.exception() is None:
+        return
+    err = task.exception()
+    log.error("Check failed", exc_info=err)
+    state.check_error = (
+        f"The check at {fmt_time(datetime.now(state.tz))} failed ({type(err).__name__}: {err}). "
+        "Details are in the add-on's log."
+    )
+
+
+async def daily_checks(state: State) -> None:
+    # The wall clock is read every 30 seconds instead of sleeping until the check time, so clock
+    # corrections and DST changes can't move or repeat the check. Starting up after today's check
+    # time never runs a check; the next one is tomorrow's.
+    now = datetime.now(state.tz)
+    started_on = now.date() if now.time() >= state.check_time else None
+    log.info("Daily check at %s (%s)", state.check_time.strftime("%H:%M"), state.tz)
+    while True:
+        now = datetime.now(state.tz)
+        if started_on != now.date() and now.time() >= state.check_time:
+            started_on = now.date()
+            start_check(state)
+        await asyncio.sleep(30)
+
+
+async def scheduler(app: web.Application):
+    task = asyncio.create_task(daily_checks(app[STATE]))
+    yield
+    task.cancel()
+
+
+# --- Requests ---
+
+def go_home(request: web.Request) -> web.HTTPSeeOther:
+    # Behind ingress the page lives under /api/hassio_ingress/<token>/, which arrives in this header.
+    return web.HTTPSeeOther(request.headers.get("X-Ingress-Path", "") + "/")
+
+
+async def index(request: web.Request) -> web.Response:
+    return web.Response(text=render(request), content_type="text/html")
+
+
+async def check_now(request: web.Request) -> web.Response:
+    start_check(request.app[STATE])
+    raise go_home(request)
+
+
+async def google_start(request: web.Request) -> web.Response:
+    state = request.app[STATE]
+    if state.google_configured:
+        state.google_sign_in = {**google.start_sign_in(state.options["google_client_id"]), "busy": False}
+    raise go_home(request)
+
+
+async def google_finish(request: web.Request) -> web.Response:
+    state = request.app[STATE]
+    pasted = str((await request.post()).get("url", ""))
+    attempt = state.google_sign_in
+    if attempt is None:
+        state.flash = ("error", "That sign-in is no longer open, possibly because the add-on restarted. "
+                                "Press Connect a Google account to start again.")
+        raise go_home(request)
+    if attempt["busy"]:  # a second click on Connect while the first is still talking to Google
+        raise go_home(request)
+    attempt["busy"] = True
+    try:
+        account = await asyncio.to_thread(
+            google.finish_sign_in, pasted, attempt,
+            state.options["google_client_id"], state.options["google_client_secret"],
+        )
+        await asyncio.to_thread(check.save_google_account, account)
+    except google.GoogleError as err:
+        message = str(err)
+    except Exception as err:
+        log.exception("Google sign-in failed")
+        message = f"Sign-in failed ({type(err).__name__}: {err}). Press Cancel, then start again."
+    else:
+        if state.google_sign_in is attempt:
+            state.google_sign_in = None
+        state.flash = ("ok", f"Connected {account['email']}. Press Check now to read its contacts.")
+        raise go_home(request)
+    # Unless it was cancelled meanwhile, the attempt stays open so a corrected address can be pasted.
+    attempt["busy"] = False
+    state.flash = ("error", message)
+    raise go_home(request)
+
+
+async def google_cancel(request: web.Request) -> web.Response:
+    request.app[STATE].google_sign_in = None
+    raise go_home(request)
+
+
+async def google_remove(request: web.Request) -> web.Response:
+    email = str((await request.post()).get("email", ""))
+    await asyncio.to_thread(check.remove_google_account, email)
+    request.app[STATE].flash = ("ok", f"Disconnected {email} and deleted its saved contacts.")
+    raise go_home(request)
+
+
+# --- Page ---
+
+def render(request: web.Request) -> str:
+    state = request.app[STATE]
+    flash, state.flash = state.flash, None
+    notice = f"<div class='flash {flash[0]}'>{esc(flash[1])}</div>" if flash else ""
+    base = esc(request.headers.get("X-Ingress-Path", "") + "/")
+    # No auto-refresh during a Google sign-in: it would wipe the pasted address.
+    refresh = "<meta http-equiv='refresh' content='5'>" if state.checking and not state.google_sign_in else ""
+    return (
+        "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+        f"<base href='{base}'>{refresh}<title>Contact Sync</title><style>{STYLE}</style></head>"
+        "<body><main><h1>Contact Sync</h1>"
+        "<p class='muted'>Read-only for now: it reads every account and never writes to any of them.</p>"
+        f"{notice}{accounts_card(state)}{google_card(state)}</main></body></html>"
+    )
+
+
+def accounts_card(state: State) -> str:
+    status = check.load_status()
+    if status:
+        rows = "".join(account_row(a) for a in status["accounts"]) or (
+            "<tr><td colspan='4' class='muted'>No accounts set up yet.</td></tr>"
+        )
+        checked = datetime.fromisoformat(status["checked_at"]).astimezone(state.tz)
+        summary = (
+            "<div class='scroll'><table><thead><tr><th>Account</th><th class='num'>Contacts</th>"
+            f"<th class='num'>Groups</th><th>Status</th></tr></thead><tbody>{rows}</tbody></table></div>"
+            f"<p class='muted'>Last checked {fmt_time(checked)}.</p>"
+        )
+    else:
+        summary = "<p class='muted'>Not checked yet.</p>"
+    failure = f"<p class='bad'>{esc(state.check_error)}</p>" if state.check_error else ""
+    button = "<button disabled>Checking…</button>" if state.checking else "<button>Check now</button>"
+    return (
+        f"<section class='card'><h2>Accounts</h2>{failure}{summary}"
+        f"<div class='row'><form method='post' action='check'>{button}</form>"
+        f"<span class='muted'>Next daily check {fmt_time(next_check_at(state))}.</span></div></section>"
+    )
+
+
+def account_row(a: dict) -> str:
+    login = f"<div class='muted'>{esc(a['login'])}</div>" if a["login"] and a["login"] != a["name"] else ""
+    if a["error"]:
+        counts = "<td class='num'>–</td><td class='num'>–</td>"
+        status = f"<span class='bad'>{esc(a['error'])}</span>"
+    else:
+        counts = f"<td class='num'>{a['contacts']:,}</td><td class='num'>{a['groups']:,}</td>"
+        status = "<span class='ok'>Connected</span>"
+    return f"<tr><td>{esc(a['service'])} · {esc(a['name'])}{login}</td>{counts}<td>{status}</td></tr>"
+
+
+def google_card(state: State) -> str:
+    # Connected accounts stay listed even without a client ID and secret, so they can still be disconnected.
+    connected = "".join(
+        f"<li class='row'><span>{esc(a['email'])}</span><form method='post' action='google/remove'>"
+        f"<input type='hidden' name='email' value='{esc(a['email'])}'>"
+        "<button class='secondary'>Disconnect</button></form></li>"
+        for a in check.google_accounts()
+    ) or "<li class='muted'>None connected yet.</li>"
+    if not state.google_configured:
+        action = (
+            "<p class='muted'>Add the Google client ID and secret on the add-on's Configuration tab, "
+            "then restart the add-on.</p>"
+        )
+    elif state.google_sign_in:
+        action = (
+            "<ol>"
+            f"<li><a href='{esc(state.google_sign_in['url'])}' target='_blank' rel='noopener'>Open Google sign-in</a>"
+            " and choose the account. If Google says it hasn't verified the app, choose <b>Advanced</b>, then"
+            " <b>Go to Contact Sync</b>.</li>"
+            "<li>Allow access to contacts. If Google shows a checkbox for contacts, tick it. The browser then"
+            " shows a “This site can't be reached” page. That's expected.</li>"
+            "<li>Copy the whole address from the browser's address bar and paste it here.</li></ol>"
+            "<form method='post' action='google/finish' onsubmit=\"this.querySelector('button').disabled=true\">"
+            "<input type='text' name='url' required autocomplete='off' placeholder='http://127.0.0.1:8765/?state=…'>"
+            "<div class='row'><button>Connect</button>"
+            "<button class='secondary' formaction='google/cancel' formnovalidate>Cancel</button></div></form>"
+        )
+    else:
+        action = "<form method='post' action='google/start'><button>Connect a Google account</button></form>"
+    return f"<section class='card'><h2>Google accounts</h2><ul class='plain'>{connected}</ul>{action}</section>"
+
+
+def fmt_time(dt: datetime) -> str:
+    return f"{dt:%a %b} {dt.day}, {dt.hour % 12 or 12}:{dt:%M} {'AM' if dt.hour < 12 else 'PM'}"
+
+
+STYLE = """
+:root{--bg:#f6f6f6;--card:#fff;--text:#1c1c1c;--muted:#6b6b6b;--line:#e2e2e2;--accent:#0b7fc2;--on-accent:#fff;--ok:#2e7d32;--bad:#c62828}
+@media (prefers-color-scheme:dark){:root{--bg:#111;--card:#1c1c1c;--text:#e6e6e6;--muted:#9a9a9a;--line:#303030;--accent:#4fb3ef;--on-accent:#06202f;--ok:#66bb6a;--bad:#ef6b6b}}
+*{box-sizing:border-box}
+body{margin:0;padding:16px;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:820px;margin:0 auto}
+h1{font-size:22px;margin:0 0 4px}
+h2{font-size:16px;margin:0 0 12px}
+a{color:var(--accent)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin:16px 0}
+.muted{color:var(--muted)}
+.ok{color:var(--ok)}
+.bad{color:var(--bad)}
+.scroll{overflow-x:auto}
+table{width:100%;border-collapse:collapse}
+th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:13px;font-weight:600;color:var(--muted)}
+th.num,td.num{text-align:right;font-variant-numeric:tabular-nums}
+.row{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin-top:12px}
+ul.plain{list-style:none;margin:0 0 12px;padding:0}
+ul.plain li{justify-content:space-between;margin-top:0;padding:6px 0;border-bottom:1px solid var(--line)}
+ol{padding-left:20px}
+ol li{margin-bottom:8px}
+button{font:inherit;padding:8px 14px;border-radius:8px;border:1px solid var(--accent);background:var(--accent);color:var(--on-accent);cursor:pointer}
+button.secondary{background:transparent;color:var(--accent)}
+button:disabled{opacity:.6;cursor:default}
+input[type=text]{width:100%;font:inherit;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text)}
+.flash{margin:16px 0;padding:10px 14px;border:1px solid var(--line);border-radius:8px;background:var(--card)}
+.flash.ok{border-color:var(--ok)}
+.flash.error{border-color:var(--bad)}
+"""
+
+
+def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    app = web.Application(middlewares=[ingress_only])
+    app[STATE] = State(load_options(), home_tz())
+    app.add_routes([
+        web.get("/", index),
+        web.post("/check", check_now),
+        web.post("/google/start", google_start),
+        web.post("/google/finish", google_finish),
+        web.post("/google/cancel", google_cancel),
+        web.post("/google/remove", google_remove),
+    ])
+    app.cleanup_ctx.append(scheduler)
+    web.run_app(app, port=PORT, access_log=None, print=None)
+
+
+if __name__ == "__main__":
+    main()
