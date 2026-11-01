@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.8
+
+- Label dropdowns in the **After sync** column show its green, like the other values there, instead of a plain background.
+
 ## 0.2.7
 
 - Clearer colors in the comparison tables: the **After sync** column is green, values that would be replaced or removed are struck through, values an account would gain are marked + in green, and an empty cell the sync would fill says "will be added". Account cells are no longer shaded.

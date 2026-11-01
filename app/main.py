@@ -384,6 +384,7 @@ details.fold>summary{cursor:pointer;font-weight:600}
 table.compare th,table.compare td{font-size:14px}
 table.compare tbody th{font-weight:normal;min-width:150px}
 table.compare td.after{min-width:180px;background:color-mix(in srgb,var(--ok) 14%,transparent)}
+table.compare td.after select{background:transparent;border-color:var(--ok)}
 .old{text-decoration:line-through;opacity:.55}
 img.thumb.old{opacity:.4}
 .new{color:var(--ok)}
