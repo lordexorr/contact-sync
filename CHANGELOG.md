@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.3
+
+- The Apply page names the groups: which ones each account creates or deletes, and which ones the person joins or leaves (for everyone, how many people join or leave each).
+
 ## 0.3.2
 
 - Applying one person is quicker: it reads, backs up and rechecks only that person's cards and the groups, instead of every contact, and stops only if something about that person changed.

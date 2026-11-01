@@ -2,7 +2,7 @@
 it's made."""
 import html
 import threading
-from collections import Counter
+from collections import Counter, defaultdict
 from urllib.parse import quote
 
 from . import base, check, plan, storage
@@ -357,7 +357,7 @@ def apply_body(review: dict | None, person: str | None, checking: bool) -> str:
     if checking:
         return f"{heading}<p class='muted'>A check is running. This page is ready once it finishes.</p>"
     return (
-        f"{heading}{_totals(work)}{notes_html}{_steps(person in people)}"
+        f"{heading}{_totals(work, person in people)}{notes_html}{_steps(person in people)}"
         "<form method='post' action='apply' onsubmit=\"this.querySelector('button').disabled=true\">"
         f"<input type='hidden' name='person' value='{esc(person or '')}'>"
         f"<input type='hidden' name='token' value='{plan.digest(work)}'>"
@@ -411,8 +411,8 @@ def _steps(one_person: bool) -> str:
     )
 
 
-def _totals(work: dict) -> str:
-    """Per account: contacts added, updated and deleted, groups created and deleted, and group members."""
+def _totals(work: dict, one_person: bool) -> str:
+    """Per account: contacts added, updated and deleted, and each group created, deleted, joined or left."""
     counts = {a: Counter() for a in work["names"]}
     for p in work["people"].values():
         for ref in p["delete"]:
@@ -421,22 +421,30 @@ def _totals(work: dict) -> str:
             counts[a]["updated"] += 1
         for a in (p["create"] or {}).get("accounts", []):
             counts[a]["added"] += 1
-    for op in work["groups"]:
-        c = counts[op["account"]]
-        c["deleted groups" if op["delete"] else "created groups"] += op["delete"] or op["create"]
-        c["joins"] += len(op["add"])
-        c["leaves"] += len(op["remove"])
+    created, deleted, joins, leaves = (defaultdict(list) for _ in range(4))  # account -> group names
+    for op in sorted(work["groups"], key=lambda op: op["fold"]):
+        a = op["account"]
+        if op["delete"]:
+            deleted[a].append(op["group"])
+        elif op["create"]:
+            created[a].append(op["group"])
+        if op["add"]:
+            joins[a].append(op["group"] if one_person else f"{op['group']} +{len(op['add']):,}")
+        if op["remove"]:
+            leaves[a].append(op["group"] if one_person else f"{op['group']} −{len(op['remove']):,}")
     rows = []
     for a, name in work["names"].items():
         c = counts[a]
-        if not +c:
+        groups = "; ".join(f"{verb} {', '.join(g)}" for verb, g in (("Created", created[a]), ("Deleted", deleted[a])) if g)
+        if one_person:
+            members = "; ".join(f"{verb} {', '.join(g)}" for verb, g in (("Added to", joins[a]), ("Taken out of", leaves[a])) if g)
+        else:
+            members = ", ".join(joins[a] + leaves[a])
+        if not (+c or groups or members):
             continue
-        groups = ", ".join(f"{c[k]:,} {k.split()[0]}" for k in ("created groups", "deleted groups") if c[k])
-        members = ", ".join(filter(None, (f"{c['joins']:,} added" if c["joins"] else "",
-                                          f"{c['leaves']:,} taken out" if c["leaves"] else "")))
         rows.append(f"<tr><td>{esc(name)}</td>" + "".join(f"<td class='num'>{c[k]:,}</td>" for k in
                                                           ("added", "updated", "deleted"))
-                    + f"<td>{groups or '–'}</td><td>{members or '–'}</td></tr>")
+                    + f"<td>{esc(groups) or '–'}</td><td>{esc(members) or '–'}</td></tr>")
     return ("<div class='scroll'><table><thead><tr><th>Account</th><th class='num'>Contacts added</th>"
             "<th class='num'>Updated</th><th class='num'>Deleted</th><th>Groups</th><th>Group members</th></tr>"
             f"</thead><tbody>{''.join(rows)}</tbody></table></div>")
