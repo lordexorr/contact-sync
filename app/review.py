@@ -118,8 +118,6 @@ def page_body(review: dict | None) -> str:
         "you click it, and kept for later checks.</p>",
         f"<p>{_counts_line(review['counts'])}</p>",
     ]
-    if not plan.is_empty(plan.scope(review)):
-        parts.append("<div class='row'><a class='button' href='apply'>Apply changes…</a></div>")
     if review["suggestions"]:
         parts.append(_suggestions(review["suggestions"]))
     if review["duplicates"]:
@@ -128,6 +126,8 @@ def page_body(review: dict | None) -> str:
         parts.append(_conflicts(review["conflicts"]))
     if review["people"] or review["groups"]:
         parts.append(_changes(review))
+    if not plan.is_empty(plan.scope(review)):  # at the end, where the review finishes
+        parts.append("<div class='row'><a class='button' href='apply'>Apply changes…</a></div>")
     parts.append(
         "<section class='card'><h2>Start over</h2><p class='muted'>Forget every match, choice and skip "
         "made on this page.</p><form method='post' action='review/reset'>"

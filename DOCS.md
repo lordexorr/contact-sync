@@ -61,7 +61,7 @@ Contacts are matched automatically when they share a phone number or email addre
 
 ## Applying changes
 
-Press **Apply changes…** at the top of the review to apply every ticked change, or **Apply just *name*…** under a person's table to apply only theirs, including their group changes. A page then shows how many contacts each account gains, has updated or deleted, and its group changes. Pressing **Apply now** does this:
+Press **Apply changes…** at the bottom of the review to apply every ticked change, or **Apply just *name*…** under a person's table to apply only theirs, including their group changes. A page then shows how many contacts each account gains, has updated or deleted, and its group changes. Pressing **Apply now** does this:
 
 1. Checks every account again. If anything changed since that page opened, in an account or in the review, it stops without writing anything.
 2. Backs up every account (see below).

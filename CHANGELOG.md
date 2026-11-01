@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.4
+
+- **Apply changes…** is at the bottom of the review, where you finish, instead of the top.
+
 ## 0.3.3
 
 - The Apply page names the groups: which ones each account creates or deletes, and which ones the person joins or leaves (for everyone, how many people join or leave each).
