@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.6
+
+- Fixed: after unticking a row, the row that moved into its place could look unticked too. The browser was restoring tick boxes, dropdowns and choices by position when the page reloaded; the review now always shows what's actually saved.
+
 ## 0.2.5
 
 - Changes are shown as a comparison table for each person: a column per account with what it has now, and an **After sync** column with what every account will have once you apply. Only details that differ get a row, and the cells that would change are shaded.

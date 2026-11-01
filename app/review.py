@@ -142,7 +142,7 @@ def _conflicts(items: list[dict]) -> str:
             shown = (f"<img class='thumb' src='thumb/{esc(o['thumb'])}.jpg' alt=''>" if o.get("thumb")
                      else f"<span>{esc(o['value'])}</span>")
             options.append(
-                f"<label class='option'><input type='radio' class='pick' name='choice-{i}' "
+                f"<label class='option'><input type='radio' class='pick' autocomplete='off' name='choice-{i}' "
                 f"data-conflict='{esc(c['id'])}' value='{esc(o['key'])}'{' checked' if picked else ''}>"
                 f"{shown}<span class='muted'>{esc(', '.join(o['accounts']))}</span>{default}</label>"
             )
@@ -190,7 +190,9 @@ def _table(title: str, columns: list[str], rows: list[dict]) -> str:
 
 
 def _row(row: dict, columns: list[str]) -> str:
-    box = (f"<label><input type='checkbox' class='skip' data-id='{esc(row['id'])}'"
+    # autocomplete=off on every control: otherwise Firefox restores ticks by position after the reload, and a
+    # row that moved to Ignored hands its unticked look to the row that took its place.
+    box = (f"<label><input type='checkbox' class='skip' autocomplete='off' data-id='{esc(row['id'])}'"
            f"{'' if row['skipped'] else ' checked'}> {esc(row['title'])}</label>")
     cells = []
     for c in columns:
@@ -210,14 +212,14 @@ def _after(after: dict) -> str:
     if kind == "values":
         # One box per value: unticked means every account ends up without it.
         return "".join(
-            f"<label class='value'><input type='checkbox' class='skip' data-id='{esc(i['id'])}'"
+            f"<label class='value'><input type='checkbox' class='skip' autocomplete='off' data-id='{esc(i['id'])}'"
             f"{' checked' if i['kept'] else ''}> {esc(i['text'])}</label>"
             for i in after["items"]
         )
     if kind == "label":
         options = "".join(f"<option value='{esc(v)}'{' selected' if v == after['chosen'] else ''}>{esc(text)}</option>"
                           for v, text in after["options"])
-        return f"<select class='label' data-id='{esc(after['id'])}'>{options}</select>"
+        return f"<select class='label' autocomplete='off' data-id='{esc(after['id'])}'>{options}</select>"
     details = (f"<details><summary class='muted'>Details</summary>{esc(after['details'])}</details>"
                if after.get("details") else "")
     return f"<div>{esc(after['value'])}</div>{details}"
