@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.1
+
+- Duplicates within one account are now a decision, like possible matches. Each shows every card side by side, with **Merge into one** and **Keep both**. Merging keeps the card with the most details, moves everything from the other cards onto it, including details Contact Sync doesn't otherwise use such as dates, social profiles and messaging handles, then deletes the others when you apply. Until you choose, the extra cards are left alone.
+- Where a person has more than one card in an account, the one with the most details is the one compared and updated.
+- Replacing or removing an iCloud photo also removes Apple's notes about the old one.
+- Google contacts are read with every field Google keeps, so a merge can carry all of them over.
+
 ## 0.3.0
 
 Apply. Contact Sync now writes the changes you review.

@@ -6,6 +6,9 @@ NAME_KEYS = ("honorificPrefix", "givenName", "middleName", "familyName", "honori
 LISTS = {"phones": "phoneNumbers", "emails": "emailAddresses", "addresses": "addresses", "urls": "urls",
          "related": "relations"}
 _KEYS = {"phones": phone_key, "emails": email_key, "urls": url_key, "related": fold}
+# Fields the sync doesn't merge field by field. Merging copies of a person in one account carries them over.
+CARRIED = ("events", "imClients", "userDefined", "calendarUrls", "externalIds", "locations", "miscKeywords",
+           "sipAddresses", "occupations", "interests")
 # Google's own types, which it translates when showing them. Any other label is stored as typed.
 _TYPES = {t.lower(): t for t in (
     "home", "work", "mobile", "homeFax", "workFax", "otherFax", "pager", "workMobile", "workPager", "main",
@@ -51,11 +54,19 @@ def read(account: str, person: dict, group_names: dict[str, str]) -> tuple[Conta
     return c, photo
 
 
-def edit(person: dict, changes: dict) -> tuple[dict, list[str]]:
+def edit(person: dict, changes: dict, carry: list[dict] = ()) -> tuple[dict, list[str]]:
     """An updateContact body making changes (an edit from the plan, apart from its photo), and the fields it
     replaces. It carries only the contact's own entries, each with every part Google sent; entries shown
-    from the person's Google profile aren't the contact's, and stay as they are."""
+    from the person's Google profile aren't the contact's, and stay as they are. carry holds other copies of
+    the person being merged into this one: their entries in the fields the sync doesn't merge are added."""
     body = _changed(person, changes)
+    for field in CARRIED:
+        mine = [dict(e) for e in _own(person.get(field))]
+        seen = [_bare(e) for e in mine]
+        extra = [_bare(e) for other in carry for e in _own(other.get(field))]
+        extra = [e for i, e in enumerate(extra) if e not in seen and e not in extra[:i]]
+        if extra:
+            body[field] = mine + extra
     sources = [s for s in person.get("metadata", {}).get("sources", []) if s.get("type") == "CONTACT"]
     return {**body, "etag": person.get("etag", ""), "metadata": {"sources": sources}}, sorted(body)
 
@@ -118,6 +129,11 @@ def _changed(person: dict, changes: dict) -> dict:
             entries.append(e)
         body[name] = entries + [_entry(field, a) for a in adding]
     return body
+
+
+def _bare(entry: dict) -> dict:
+    """An entry without what Google adds on reading it, ready to add to another contact."""
+    return {k: v for k, v in entry.items() if k not in ("metadata", "formattedType", "formattedProtocol")}
 
 
 def _put(entry: dict, values: dict) -> dict:

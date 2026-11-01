@@ -54,7 +54,7 @@ After each check, the **Review** section at the top of the Contact Sync page cou
   - Untick a row to leave every account as it is for that row. It moves to a collapsed **Ignored** section at the bottom, where ticking it again brings it back.
   - In a list, such as two different work addresses, untick a value in **After sync** to leave it out of every account; it's removed from any account that has it.
   - Groups get a table of their own, with each account's member count. Google labels count as groups.
-- **Duplicates within one account:** listed for information. Applying updates one copy in each account and leaves the others as they are.
+- **Duplicates within one account:** the same person more than once in one account, with every card shown side by side. **Merge into one** keeps the card with the most details, moves everything from the other cards onto it (including details Contact Sync doesn't otherwise use, such as dates, social profiles and messaging handles), and deletes the others when you apply. The person's table then has a **Duplicate cards** row, which you can untick. **Keep both** leaves them as they are. Either choice moves the card to a collapsed **Decided** section, where you can switch. Until you choose, applying leaves the extra cards alone. A same-name pair in one account first appears under **Possible matches**; answering **Same person** brings it here.
 - **Start over** forgets every match, choice and skip.
 
 Contacts are matched automatically when they share a phone number or email address and their names agree, or when they have the same full name in different accounts and nothing contradicts it. Being matched only means the copies are the same person: every difference between them still appears under **Changes**. Everything you choose is saved the moment you click it, and kept for later checks.
@@ -71,6 +71,7 @@ Press **Apply changes…** at the top of the review to apply every ticked change
 The results page lists every change made and every one that wasn't, with the reason. A person with a failed change stays in the review, so applying again retries it.
 
 - People in an unanswered possible match are left out until you answer it, so a sync can't create a second copy of someone.
+- A duplicate card being merged is deleted only after everything on it has been added to the card kept. If that fails, it's left as it is.
 - A value between accounts that you haven't picked uses the one marked in the review.
 
 ### Deletions

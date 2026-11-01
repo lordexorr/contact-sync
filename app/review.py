@@ -59,6 +59,12 @@ def decide_match(pair: str, decision: str) -> None:
     _update(change)
 
 
+def decide_duplicate(dup_id: str, decision: str) -> None:
+    """Merge a person's copies in one account into one card, or keep them all."""
+    if dup_id and decision in ("merge", "keep"):
+        _update(lambda d: d.setdefault("duplicates", {}).update({dup_id: decision}))
+
+
 def pick(choice_id: str, choice: str) -> None:
     """A value picked for a field that differs between accounts, or a label picked for one value."""
     if choice_id and choice:
@@ -116,12 +122,12 @@ def page_body(review: dict | None) -> str:
         parts.append("<div class='row'><a class='button' href='apply'>Apply changes…</a></div>")
     if review["suggestions"]:
         parts.append(_suggestions(review["suggestions"]))
+    if review["duplicates"]:
+        parts.append(_duplicates(review["duplicates"]))
     if review["conflicts"]:
         parts.append(_conflicts(review["conflicts"]))
     if review["people"] or review["groups"]:
         parts.append(_changes(review))
-    if review["duplicates"]:
-        parts.append(_duplicates(review["duplicates"]))
     parts.append(
         "<section class='card'><h2>Start over</h2><p class='muted'>Forget every match, choice and skip "
         "made on this page.</p><form method='post' action='review/reset'>"
@@ -137,20 +143,24 @@ def _counts_line(counts: dict) -> str:
         parts.append(f"{_n(counts['suggestions'], 'possible match', 'possible matches')} to confirm")
     if counts["conflicts"]:
         parts.append(f"{_n(counts['conflicts'], 'value')} to choose between accounts")
+    if counts["duplicates"]:
+        parts.append(f"{_n(counts['duplicates'], 'duplicate')} to decide")
     return " · ".join(parts)
+
+
+def _copy(c: dict, heading: str) -> str:
+    """One copy of a contact, with everything it holds, for the side-by-side cards."""
+    return (f"<div><div class='muted'>{esc(heading)}</div><b>{esc(c['name'])}</b>"
+            + (f"<img class='thumb' src='thumb/{esc(c['thumb'])}.jpg' alt=''>" if c["thumb"] else "")
+            + "".join(f"<div>{esc(line)}</div>" for line in c["lines"])
+            + (f"<div class='muted'>{esc(c['updated'])}</div>" if c["updated"] else "")
+            + "</div>")
 
 
 def _suggestions(items: list[dict]) -> str:
     rows = []
     for s in items:
-        sides = "".join(
-            f"<div><div class='muted'>{esc(c['account'])}</div><b>{esc(c['name'])}</b>"
-            + (f"<img class='thumb' src='thumb/{esc(c['thumb'])}.jpg' alt=''>" if c["thumb"] else "")
-            + "".join(f"<div>{esc(line)}</div>" for line in c["lines"])
-            + (f"<div class='muted'>{esc(c['updated'])}</div>" if c["updated"] else "")
-            + "</div>"
-            for c in s["contacts"]
-        )
+        sides = "".join(_copy(c, c["account"]) for c in s["contacts"])
         pair = esc(s["id"])
         rows.append(
             f"<div class='item'><p class='muted'>{esc(s['reason'])}</p><div class='pair'>{sides}</div><div class='row'>"
@@ -292,9 +302,29 @@ def _thumb(fingerprint: str, extra_class: str = "") -> str:
 
 
 def _duplicates(items: list[dict]) -> str:
-    rows = "".join(f"<li>{esc(d['person'])}: {d['count']} copies in {esc(d['account'])}</li>" for d in items)
-    return ("<section class='card'><h2>Duplicates within one account</h2><p class='muted'>Applying updates one "
-            f"copy in each account and leaves the others as they are.</p><ul>{rows}</ul></section>")
+    """People with more than one card in the same account. Undecided ones on top; decided ones in a collapsed
+    section, where the other choice is still a click away."""
+    def card(d: dict) -> str:
+        sides = "".join(_copy(c, "Kept if merged" if c["kept"] else "Another card") for c in d["copies"])
+        buttons = "".join(
+            f"<button type='button' class='dup{'' if value == 'merge' else ' secondary'}' data-id='{esc(d['id'])}' "
+            f"data-decision='{value}'>{text}</button>"
+            for value, text in (("merge", "Merge into one"), ("keep", "Keep both")) if value != d["choice"])
+        chosen = {"merge": "Merging into one card.", "keep": "Keeping every card."}.get(d["choice"], "")
+        return (f"<div class='item'><b>{esc(d['person'])}</b> · {len(d['copies'])} cards in {esc(d['account'])}"
+                f"<div class='pair'>{sides}</div><div class='row'>"
+                + (f"<span class='muted'>{chosen}</span>" if chosen else "") + f"{buttons}</div></div>")
+
+    waiting = [card(d) for d in items if not d["choice"]]
+    decided = [card(d) for d in items if d["choice"]]
+    folded = (f"<details class='fold'><summary>Decided ({len(decided)})</summary>{''.join(decided)}</details>"
+              if decided else "")
+    body = "".join(waiting) or "<p class='muted'>Nothing left to decide.</p>"
+    return ("<section class='card'><h2>Duplicates within one account " f"({len(waiting)} to decide)</h2>"
+            "<p class='muted'>The same person more than once in one account. <b>Merge into one</b> moves "
+            "everything from the other cards onto the one with the most details, including details Contact "
+            "Sync doesn't otherwise use, then deletes the others when you apply. <b>Keep both</b> leaves them "
+            f"as they are. Until you choose, applying leaves the extra cards alone.</p>{body}{folded}</section>")
 
 
 def apply_body(review: dict | None, person: str | None, checking: bool) -> str:
@@ -315,6 +345,11 @@ def apply_body(review: dict | None, person: str | None, checking: bool) -> str:
     if undecided and not plan.is_empty(work):
         notes.append(f"{_n(undecided, 'value')} between accounts {'hasn' if undecided == 1 else 'haven'}'t been "
                      "picked. The value marked in the review is used.")
+    open_dups = sum(not d["choice"] and (person is None or d["id"].startswith(person + "|"))
+                    for d in review["duplicates"])
+    if open_dups and not plan.is_empty(work):
+        notes.append(f"{_n(open_dups, 'duplicate')} {'hasn' if open_dups == 1 else 'haven'}'t been decided. "
+                     "Their extra cards are left as they are.")
     notes_html = "".join(f"<p class='muted'>{esc(n)}</p>" for n in notes)
     back = "<a href='review'>Back to the review</a>"
     if plan.is_empty(work):
@@ -433,6 +468,8 @@ document.addEventListener('change', e => {
 document.addEventListener('click', e => {
   const b = e.target.closest('button.match');
   if (b) { b.disabled = true; save('review/match', {pair: b.dataset.pair, decision: b.dataset.decision}); }
+  const d = e.target.closest('button.dup');
+  if (d) { d.disabled = true; save('review/duplicate', {id: d.dataset.id, decision: d.dataset.decision}); }
 });
 window.addEventListener('load', () => {
   const y = sessionStorage.getItem('reviewScroll');

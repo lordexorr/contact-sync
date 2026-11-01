@@ -24,9 +24,9 @@ REDIRECT_URI = "http://127.0.0.1:8765/"
 # Refresh errors that only a new sign-in, or a corrected client ID and secret, can fix.
 RECONNECT_ERRORS = ("invalid_grant", "invalid_client", "unauthorized_client", "deleted_client")
 PERSON_FIELDS = ",".join([
-    "addresses", "biographies", "birthdays", "emailAddresses", "events",
-    "imClients", "memberships", "metadata", "names", "nicknames",
-    "organizations", "phoneNumbers", "photos", "relations", "urls", "userDefined",
+    "addresses", "biographies", "birthdays", "calendarUrls", "emailAddresses", "events", "externalIds",
+    "imClients", "interests", "locations", "memberships", "metadata", "miscKeywords", "names", "nicknames",
+    "occupations", "organizations", "phoneNumbers", "photos", "relations", "sipAddresses", "urls", "userDefined",
 ])
 # Google limits how many changes one account takes a minute, and wants them one at a time.
 WRITE_GAP = 1.1  # seconds between writes

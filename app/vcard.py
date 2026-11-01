@@ -1,6 +1,7 @@
 """Reading and writing iCloud's vCards."""
 import base64
 import re
+from collections import defaultdict
 
 from .model import Contact, Value, address_key, email_key, fold, label, label_text, phone_key, url_key
 
@@ -194,21 +195,32 @@ _APPLE = {name.lower(): name for name in (
     "Other", "HomePage", "Father", "Mother", "Parent", "Brother", "Sister", "Child", "Friend", "Spouse", "Partner",
     "Assistant", "Manager")}
 _LABEL_TYPES = {"home", "work", "cell", "iphone", "main", "pager", "fax", "other", "voice"}  # TYPE values that make a label
+# Lines that describe the card's photo, which go when the photo is replaced and never move to another card.
+_PHOTO_LINES = {"PHOTO", "X-IMAGEHASH", "X-IMAGETYPE"}
+# Lines a merge never copies from another card: the card's own identity, and everything the sync already
+# merges field by field.
+_NOT_CARRIED = {"BEGIN", "END", "VERSION", "PRODID", "UID", "REV", "N", "FN", "NICKNAME", "ORG", "TITLE", "BDAY",
+                "NOTE", "X-ABSHOWAS", "X-ADDRESSBOOKSERVER-KIND", "X-ADDRESSBOOKSERVER-MEMBER", "X-ABLABEL",
+                "X-ABADR"} | _PHOTO_LINES | set(_PROPS.values())
+# Details a card can hold several of, so a merge adds any the kept card lacks. Of any other detail, such as
+# a gender, the kept card's own stays when it has one.
+_MANY = {"X-ABDATE", "X-SOCIALPROFILE", "IMPP", "X-AIM", "X-JABBER", "X-MSN", "X-YAHOO", "X-ICQ", "X-SKYPE",
+         "X-QQ", "X-GADUGADU", "CATEGORIES"}
 
 
 def edit(text: str, changes: dict, photo: tuple[bytes, str] | None = None,
-         current_photo: tuple[bytes, str] | None = None) -> str:
+         current_photo: tuple[bytes, str] | None = None, carry: list[str] = ()) -> str:
     """The vCard with changes made: an edit from the plan ("set", "photo", "add", "remove", "relabel").
 
     photo is the new picture, as (data, "JPEG" or "PNG"), when changes["photo"] replaces it. current_photo is
     the picture the contact has now. iCloud gives it as a link, which is swapped for the picture itself so
-    rewriting the contact can't lose it.
+    rewriting the contact can't lose it. carry holds the vCards of copies being merged into this one.
     """
     card = _Card(text)
     for field, value in changes["set"].items():
         _set(card, field, value)
     if changes["photo"] == "clear" or photo:
-        card.drop(p[0] for p in card.find("PHOTO"))
+        card.drop(p[0] for p in card.props() if p[2] in _PHOTO_LINES)
         if photo:
             card.insert(_photo_line(photo))
     elif current_photo:
@@ -219,6 +231,8 @@ def edit(text: str, changes: dict, photo: tuple[bytes, str] | None = None,
     _edit_lists(card, changes)
     for value in changes["add"]:
         _add(card, value)
+    for other in carry:
+        _carry(card, other)
     return card.text()
 
 
@@ -368,6 +382,33 @@ def _edit_lists(card: _Card, changes: dict) -> None:
         else:
             lines.append(line)
     card.lines = lines
+
+
+def _carry(card: _Card, other: str) -> None:
+    """Copy onto card every detail of another copy of the person that the sync doesn't merge field by field,
+    such as dates, social profiles and messaging handles, so deleting that copy loses nothing."""
+    have_names = {name for _, _, name, _, _ in card.props()}
+    have_lines = {(name, raw.lower()) for _, _, name, _, raw in card.props()}
+    grouped, single = defaultdict(list), []
+    for line in _unfold(other):
+        if not (m := _LINE.match(line)):
+            continue
+        name = m["name"].upper()
+        if m["group"]:
+            grouped[m["group"].lower()].append(m)
+        elif name not in _NOT_CARRIED and (name, m["value"].lower()) not in have_lines:
+            if name in _MANY or name not in have_names:
+                single.append(line)
+    card.insert(*single)
+    for members in grouped.values():
+        main = {m["name"].upper() for m in members} - {"X-ABLABEL", "X-ABADR"}
+        if not main or main & _NOT_CARRIED:
+            continue
+        if all((m["name"].upper(), m["value"].lower()) in have_lines for m in members if m["name"].upper() in main):
+            continue
+        # A labelled detail comes over whole, under a group name of its own on this card.
+        group = f"item{card.next_item()}"
+        card.insert(*[f"{group}.{m.string[m.start('name'):]}" for m in members])
 
 
 def _add(card: _Card, value: dict) -> None:

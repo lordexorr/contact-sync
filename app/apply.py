@@ -86,7 +86,7 @@ def _apply(options: dict, person: str | None, token: str, tz, progress: Progress
         result["status"], result["message"] = "done", "Nothing to apply."
         return
     progress.total = (sum(len(p["delete"]) + len(p["update"]) + len((p["create"] or {}).get("accounts", []))
-                          for p in work["people"].values()) + len(work["groups"]))
+                          + len(p["drop"]) for p in work["people"].values()) + len(work["groups"]))
     with ExitStack() as stack:
         accounts = _Accounts(options, raw, stack)
         progress.step = "Backing up every account"
@@ -191,7 +191,7 @@ def _backup(raw: dict, work: dict, accounts: _Accounts, tz) -> str:
                      for p in data["people"]]
         (folder / f"{name}.vcf").write_bytes("".join(c.rstrip("\r\n") + "\r\n" for c in cards).encode())
     touched = {e["ref"] for p in work["people"].values() for e in p["update"].values()}
-    touched |= {ref for p in work["people"].values() for ref in p["delete"]}
+    touched |= {ref for p in work["people"].values() for ref in p["delete"] + p["drop"]}
     for ref in sorted(touched):
         if accounts.has_photo(ref):
             try:
@@ -239,10 +239,13 @@ class _Writer:
         for key, p in sorted(self.work["people"].items(), key=lambda item: fold(item[1]["name"])):
             for ref in p["delete"]:
                 self._do(key, ref.partition("|")[0], p["name"], "Deleted", self._delete, ref)
-            for account, edit in p["update"].items():
-                self._do(key, account, p["name"], describe(edit), self._update, account, edit)
+            updated = {account: self._do(key, account, p["name"], describe(edit), self._update, account, edit)
+                       for account, edit in p["update"].items()}
             for account in (p["create"] or {}).get("accounts", []):
                 self._do(key, account, p["name"], "Added", self._create, key, account, p["create"]["contact"])
+            for ref in p["drop"]:  # an extra copy goes only once everything on it is on the copy kept
+                account = ref.partition("|")[0]
+                self._do(key, account, p["name"], "Duplicate card deleted", self._drop, ref, updated.get(account))
         for op in self.work["groups"]:
             self._group(op)
 
@@ -274,20 +277,28 @@ class _Writer:
             self.accounts.get(account).delete_contact(cid)
         self.deleted.add(ref)
 
+    def _drop(self, ref: str, kept_updated: bool | None) -> None:
+        if not kept_updated:
+            raise _NotMade("Left as it is, because moving its details onto the card kept didn't work.")
+        self._delete(ref)
+
     def _update(self, account: str, edit: dict) -> str:
         edit, photo, note = self._photo_for(edit)
-        if note and not (edit["set"] or edit["photo"] or edit["add"] or edit["remove"] or edit["relabel"]):
+        if note and not (edit["set"] or edit["photo"] or edit["add"] or edit["remove"] or edit["relabel"]
+                         or edit.get("carry")):
             raise _NotMade(note)
         cid = edit["ref"].partition("|")[2]
+        carry = [r.partition("|")[2] for r in edit.get("carry", [])]
         conn = self.accounts.get(account)
         if account.startswith("icloud:"):
             item = self._items[account][cid]
             source = self.accounts.raw[account]["photos"].get(cid)
             # A photo iCloud gives as a link goes back as the picture itself, so the rewrite keeps it.
             current = self.accounts.photo(edit["ref"]) if edit["photo"] is None and source and source[0] == "url" else None
-            conn.put(item["href"], vcard.edit(item["vcard"], edit, photo, current), item["etag"])
+            text = vcard.edit(item["vcard"], edit, photo, current, [self._items[account][c]["vcard"] for c in carry])
+            conn.put(item["href"], text, item["etag"])
         else:
-            body, fields = people.edit(self._people[account][cid], edit)
+            body, fields = people.edit(self._people[account][cid], edit, [self._people[account][c] for c in carry])
             if fields:
                 conn.update_contact(cid, body, fields)
             if edit["photo"] == "clear":
@@ -396,6 +407,8 @@ def describe(edit: dict) -> str:
         parts += [f"{_count(n, plan.MULTI[f])} {verb}" for f, n in Counter(v["field"] for v in edit[kind]).items()]
     if edit["relabel"]:
         parts.append(f"{_count(len(edit['relabel']), 'label')} changed")
+    if edit.get("carry"):
+        parts.append(f"details of {_count(len(edit['carry']), 'duplicate card')} moved here")
     text = ", ".join(parts) or "updated"
     return text[0].upper() + text[1:]
 

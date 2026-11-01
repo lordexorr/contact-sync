@@ -45,6 +45,7 @@ def build(contacts: list[Contact], accounts: list[dict], decisions: dict, base: 
     contacts = [c for c in contacts if c.account in names]
     by_ref = {c.ref: c for c in contacts}
     picks, skips, keeps = decisions.get("picks", {}), set(decisions.get("skips", [])), set(decisions.get("keeps", []))
+    duplicates = decisions.get("duplicates", {})  # "<person>|dup:<account>" -> "merge" or "keep"
     last = _Last(base or {}, set(by_ref))
     clusters, suggestions = match.match(contacts, set(decisions.get("same", [])) | last.links(),
                                         set(decisions.get("different", [])))
@@ -68,10 +69,14 @@ def build(contacts: list[Contact], accounts: list[dict], decisions: dict, base: 
         key = refs[0]
         merged, conflicts = _merge(key, copies, picks, names, last)
         review["conflicts"] += [{**c, "person": merged["display"], "decided": c["id"] in picks} for c in conflicts]
-        review["duplicates"] += [{"person": merged["display"], "account": names[a], "count": n}
-                                 for a, n in Counter(c.account for c in copies).items() if n > 1]
         person = _Person(key, copies, merged, names, skips, keeps, last)
-        person.compare()
+        for a, extras in person.extras.items():
+            dup_id = f"{key}|dup:{a}"
+            review["duplicates"].append({
+                "id": dup_id, "person": merged["display"], "account": names[a], "choice": duplicates.get(dup_id, ""),
+                "copies": [{**_summary(c, names), "kept": c is person.first[a]} for c in [person.first[a]] + extras],
+            })
+        person.compare(duplicates)
         person.ops["held"] = key in waiting
         if not person.ops["delete"]:
             person.memberships(have, dropped, to_group, from_group, totals)
@@ -88,6 +93,7 @@ def build(contacts: list[Contact], accounts: list[dict], decisions: dict, base: 
         "changes": sum(not r["skipped"] for r in rows),
         "suggestions": len(review["suggestions"]),
         "conflicts": sum(not c["decided"] for c in review["conflicts"]),
+        "duplicates": sum(not d["choice"] for d in review["duplicates"]),
     }
     return review
 
@@ -152,7 +158,7 @@ def show(field: str, value: str) -> str:
 
 
 def _edits(person_ops: dict) -> bool:
-    return bool(person_ops["update"] or person_ops["create"] or person_ops["delete"])
+    return bool(person_ops["update"] or person_ops["create"] or person_ops["delete"] or person_ops["drop"])
 
 
 def _blank() -> dict:
@@ -365,26 +371,31 @@ def _now(old: str, new: str, changing: bool) -> list[dict]:
 
 class _Person:
     """One person's comparison rows, and the edits applying them makes to each account's copy. Where an
-    account has the person twice, the first copy is the one compared and updated."""
+    account has the person more than once, the copy with the most details is the one compared and updated,
+    and the one kept if the copies are merged."""
 
     def __init__(self, key: str, copies: list[Contact], merged: dict, names: dict, skips: set, keeps: set,
                  last: _Last):
         self.key, self.merged, self.names = key, merged, names
         self.skips, self.keeps, self.last = skips, keeps, last
-        self.first: dict[str, Contact] = {}
+        by_account = defaultdict(list)
         for c in copies:
-            self.first.setdefault(c.account, c)
+            by_account[c.account].append(c)
+        self.first = {a: max(cs, key=_detail_count) for a, cs in by_account.items()}
+        self.extras = {a: [c for c in cs if c is not self.first[a]] for a, cs in by_account.items() if len(cs) > 1}
         self.missing = [a for a in names if a not in self.first]
         # Each account's list values by key, field by field.
         self.values = {a: {f: {(v.key or fold(v.value)): v for v in getattr(c, f)} for f in MULTI}
                        for a, c in self.first.items()}
         self.rows: list[dict] = []
         self.edits: dict[str, dict] = defaultdict(_blank)
+        # "drop" holds extra copies that merging deletes, once everything on them is on the copy kept.
         self.ops = {"name": merged["display"], "refs": [c.ref for c in copies], "held": False,
-                    "update": {}, "create": None, "delete": []}
+                    "update": {}, "create": None, "delete": [], "drop": []}
 
-    def compare(self) -> None:
-        """Fill in the rows, and the edits for the rows left ticked."""
+    def compare(self, duplicates: dict) -> None:
+        """Fill in the rows, and the edits for the rows left ticked. duplicates holds the user's merge or keep
+        choices for copies in the same account."""
         gone = self.last.deleted_from(self.ops["refs"], self.missing)
         if gone:
             if not self._delete_row(gone)["skipped"]:
@@ -392,12 +403,15 @@ class _Person:
                 return  # nothing else about a person matters once they're being deleted
         elif self.missing and not self._contact_row()["skipped"]:
             self.ops["create"] = {"accounts": self.missing, "contact": self._new_contact()}
+        for a in self.extras:
+            if duplicates.get(f"{self.key}|dup:{a}") == "merge":
+                self._merge_row(a)
         self._single_rows()
         self._photo_row()
         for field, noun in MULTI.items():
             self._list_rows(field, noun)
         self.ops["update"] = {a: {"ref": self.first[a].ref, **e} for a, e in self.edits.items()
-                              if e["set"] or e["photo"] or e["add"] or e["remove"] or e["relabel"]}
+                              if e["set"] or e["photo"] or e["add"] or e["remove"] or e["relabel"] or e.get("carry")}
 
     def memberships(self, have: dict, dropped: set, to_group, from_group, totals) -> None:
         """Note the groups the person joins in each account, and the ones they leave everywhere because an
@@ -441,6 +455,18 @@ class _Person:
                 cells[name] = [_DELETED] if a in gone else [{"text": "Not in this account"}]
         return self._row(f"{self.key}|new", "Contact", cells, list(self.first),
                          {"kind": "text", "value": "Deleted from every account"})
+
+    def _merge_row(self, account: str) -> None:
+        """One card in place of several in account: everything on the others moves onto the one kept, which
+        the other rows then bring up to date, and the others are deleted."""
+        cells = {name: [{"text": "—"}] for a, name in self.names.items() if a != account}
+        cells[self.names[account]] = ([{"text": f"{self.first[account].display()} (kept)"}]
+                                      + [{"text": c.display(), "state": "old"} for c in self.extras[account]])
+        after = {"kind": "text", "value": "One card", "details": "Everything on the other cards, including details "
+                 "Contact Sync doesn't otherwise use, moves onto the card kept. The others are then deleted."}
+        if not self._row(f"{self.key}|dup:{account}", "Duplicate cards", cells, [account], after)["skipped"]:
+            self.edits[account]["carry"] = [c.ref for c in self.extras[account]]
+            self.ops["drop"] += [c.ref for c in self.extras[account]]
 
     def _new_contact(self) -> dict:
         """The edit that fills a new, empty contact with the person."""
@@ -564,6 +590,11 @@ class _Person:
     def _deleted_note(self, field: str, key: str) -> str:
         by = self._deleted_by(field, key)
         return f"Deleted from {', '.join(self.names[a] for a in by)} since the last sync" if by else ""
+
+
+def _detail_count(c: Contact) -> int:
+    singles = sum(bool(getattr(c, f)) for f in CLEARABLE) + bool(c.name()) + (c.photo not in ("", "?"))
+    return singles + sum(len(getattr(c, f)) for f in MULTI) + len(c.groups)
 
 
 def _group_rows(names, have, dropped, spelling, members, to_group, from_group, totals, skips, last):
