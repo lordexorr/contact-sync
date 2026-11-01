@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 
 from aiohttp import web
 
-from . import check, google
+from . import check, google, photos, review
 from .settings import load_options
 
 log = logging.getLogger("contact_sync")
@@ -107,25 +107,74 @@ async def scheduler(app: web.Application):
 
 # --- Requests ---
 
-def go_home(request: web.Request) -> web.HTTPSeeOther:
+def go_to(request: web.Request, path: str = "") -> web.HTTPSeeOther:
     # Behind ingress the page lives under /api/hassio_ingress/<token>/, which arrives in this header.
-    return web.HTTPSeeOther(request.headers.get("X-Ingress-Path", "") + "/")
+    return web.HTTPSeeOther(request.headers.get("X-Ingress-Path", "") + "/" + path)
 
 
 async def index(request: web.Request) -> web.Response:
-    return web.Response(text=render(request), content_type="text/html")
+    state = request.app[STATE]
+    body = (
+        "<h1>Contact Sync</h1>"
+        "<p class='muted'>Read-only for now: it reads every account and never writes to any of them.</p>"
+        f"{take_flash(state)}{review_card(state)}{accounts_card(state)}{icloud_card(state)}{google_card(state)}"
+    )
+    # No auto-refresh during a Google sign-in: it would wipe the pasted address.
+    return page(request, body, refresh=state.checking and not state.google_sign_in)
 
 
 async def check_now(request: web.Request) -> web.Response:
     start_check(request.app[STATE])
-    raise go_home(request)
+    raise go_to(request)
+
+
+async def review_page(request: web.Request) -> web.Response:
+    state = request.app[STATE]
+    try:
+        content = review.page_body(review.current_plan(state.options))
+    except Exception:
+        log.exception("Couldn't put the review together")
+        content = "<h1>Review</h1><p class='bad'>Couldn't put the review together. Details are in the add-on's log.</p>"
+    return page(request, f"<p><a href='./'>← Contact Sync</a></p>{take_flash(state)}{content}")
+
+
+async def review_match(request: web.Request) -> web.Response:
+    form = await request.post()
+    review.decide_match(str(form.get("pair", "")), str(form.get("decision", "")))
+    raise go_to(request, "review")
+
+
+async def review_pick(request: web.Request) -> web.Response:
+    form = await request.post()
+    review.pick(str(form.get("conflict", "")), str(form.get("choice", "")))
+    raise go_to(request, "review")
+
+
+async def review_changes(request: web.Request) -> web.Response:
+    form = await request.post()
+    review.save_changes([str(v) for v in form.getall("shown", [])], {str(v) for v in form.getall("keep", [])})
+    request.app[STATE].flash = ("ok", "Choices saved.")
+    raise go_to(request, "review")
+
+
+async def review_reset(request: web.Request) -> web.Response:
+    review.reset()
+    request.app[STATE].flash = ("ok", "Every match, choice and skip is forgotten.")
+    raise go_to(request, "review")
+
+
+async def thumb(request: web.Request) -> web.StreamResponse:
+    path = photos.THUMB_DIR / request.match_info["name"]
+    if not path.is_file():
+        raise web.HTTPNotFound()
+    return web.FileResponse(path)
 
 
 async def google_start(request: web.Request) -> web.Response:
     state = request.app[STATE]
     if state.google_configured:
         state.google_sign_in = {**google.start_sign_in(state.options["google_client_id"]), "busy": False}
-    raise go_home(request)
+    raise go_to(request)
 
 
 async def google_finish(request: web.Request) -> web.Response:
@@ -135,9 +184,9 @@ async def google_finish(request: web.Request) -> web.Response:
     if attempt is None:
         state.flash = ("error", "That sign-in is no longer open, possibly because the add-on restarted. "
                                 "Press Connect a Google account to start again.")
-        raise go_home(request)
+        raise go_to(request)
     if attempt["busy"]:  # a second click on Connect while the first is still talking to Google
-        raise go_home(request)
+        raise go_to(request)
     attempt["busy"] = True
     try:
         account = await asyncio.to_thread(
@@ -154,42 +203,50 @@ async def google_finish(request: web.Request) -> web.Response:
         if state.google_sign_in is attempt:
             state.google_sign_in = None
         state.flash = ("ok", f"Connected {account['email']}. Press Check now to read its contacts.")
-        raise go_home(request)
+        raise go_to(request)
     # Unless it was cancelled meanwhile, the attempt stays open so a corrected address can be pasted.
     attempt["busy"] = False
     state.flash = ("error", message)
-    raise go_home(request)
+    raise go_to(request)
 
 
 async def google_cancel(request: web.Request) -> web.Response:
     request.app[STATE].google_sign_in = None
-    raise go_home(request)
+    raise go_to(request)
 
 
 async def google_remove(request: web.Request) -> web.Response:
     email = str((await request.post()).get("email", ""))
     await asyncio.to_thread(check.remove_google_account, email)
     request.app[STATE].flash = ("ok", f"Disconnected {email} and deleted its saved contacts.")
-    raise go_home(request)
+    raise go_to(request)
 
 
 # --- Page ---
 
-def render(request: web.Request) -> str:
-    state = request.app[STATE]
-    flash, state.flash = state.flash, None
-    notice = f"<div class='flash {flash[0]}'>{esc(flash[1])}</div>" if flash else ""
+def page(request: web.Request, body: str, refresh: bool = False) -> web.Response:
     base = esc(request.headers.get("X-Ingress-Path", "") + "/")
-    # No auto-refresh during a Google sign-in: it would wipe the pasted address.
-    refresh = "<meta http-equiv='refresh' content='5'>" if state.checking and not state.google_sign_in else ""
-    return (
+    meta = "<meta http-equiv='refresh' content='5'>" if refresh else ""
+    return web.Response(content_type="text/html", text=(
         "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width, initial-scale=1'>"
-        f"<base href='{base}'>{refresh}<title>Contact Sync</title><style>{STYLE}</style></head>"
-        "<body><main><h1>Contact Sync</h1>"
-        "<p class='muted'>Read-only for now: it reads every account and never writes to any of them.</p>"
-        f"{notice}{accounts_card(state)}{icloud_card(state)}{google_card(state)}</main></body></html>"
-    )
+        f"<base href='{base}'>{meta}<title>Contact Sync</title><style>{STYLE}</style></head>"
+        f"<body><main>{body}</main></body></html>"
+    ))
+
+
+def take_flash(state: State) -> str:
+    flash, state.flash = state.flash, None
+    return f"<div class='flash {flash[0]}'>{esc(flash[1])}</div>" if flash else ""
+
+
+def review_card(state: State) -> str:
+    try:
+        return review.summary_card(review.current_plan(state.options))
+    except Exception:
+        log.exception("Couldn't put the review together")
+        return ("<section class='card'><h2>Review</h2><p class='bad'>Couldn't put the review together. "
+                "Details are in the add-on's log.</p></section>")
 
 
 def accounts_card(state: State) -> str:
@@ -299,13 +356,21 @@ ul.plain{list-style:none;margin:0 0 12px;padding:0}
 ul.plain li{justify-content:space-between;margin-top:0;padding:6px 0;border-bottom:1px solid var(--line)}
 ol{padding-left:20px}
 ol li{margin-bottom:8px}
-button{font:inherit;padding:8px 14px;border-radius:8px;border:1px solid var(--accent);background:var(--accent);color:var(--on-accent);cursor:pointer}
+button,a.button{display:inline-block;font:inherit;text-decoration:none;padding:8px 14px;border-radius:8px;border:1px solid var(--accent);background:var(--accent);color:var(--on-accent);cursor:pointer}
 button.secondary{background:transparent;color:var(--accent)}
 button:disabled{opacity:.6;cursor:default}
 input[type=text]{width:100%;font:inherit;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text)}
 .flash{margin:16px 0;padding:10px 14px;border:1px solid var(--line);border-radius:8px;background:var(--card)}
 .flash.ok{border-color:var(--ok)}
 .flash.error{border-color:var(--bad)}
+.item{padding:12px 0;border-bottom:1px solid var(--line)}
+.item:last-child{border-bottom:0}
+.pair{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin:8px 0}
+ul.changes{list-style:none;margin:6px 0 0;padding:0}
+ul.changes li{padding:3px 0}
+.option{display:flex;align-items:center;gap:8px;margin:6px 0}
+img.thumb{width:48px;height:48px;border-radius:50%;object-fit:cover;vertical-align:middle;margin-left:8px}
+details{margin:2px 0 0 26px}
 """
 
 
@@ -316,6 +381,12 @@ def main() -> None:
     app.add_routes([
         web.get("/", index),
         web.post("/check", check_now),
+        web.get("/review", review_page),
+        web.post("/review/match", review_match),
+        web.post("/review/pick", review_pick),
+        web.post("/review/changes", review_changes),
+        web.post("/review/reset", review_reset),
+        web.get(r"/thumb/{name:[0-9a-f]+\.jpg}", thumb),
         web.post("/google/start", google_start),
         web.post("/google/finish", google_finish),
         web.post("/google/cancel", google_cancel),

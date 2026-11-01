@@ -4,13 +4,13 @@ A Home Assistant add-on that keeps contacts in sync across any number of iCloud 
 
 ## Status
 
-**0.1.x — connection check.** It connects to each account and reports how many contacts and groups it finds. It doesn't sync yet.
+**0.2.x — review.** It matches the same person across every account and shows every change a sync would make. It doesn't change any contacts yet.
 
 | Stage | What it adds | Status |
 |---|---|---|
 | 1. Connection check | Reads every account and shows contact counts and errors | Done (0.1.x) |
-| 2. Review page | Matches the same person across accounts and lists every change a sync would make; skip any change or pick between conflicting values | Next |
-| 3. Apply | Backs up every account, then makes the reviewed changes; a daily notification when changes are waiting | Planned |
+| 2. Review page | Matches the same person across accounts and lists every change a sync would make; skip any change or pick between conflicting values | Done (0.2.x) |
+| 3. Apply | Backs up every account, then makes the reviewed changes; a daily notification when changes are waiting | Next |
 
 ## Install
 

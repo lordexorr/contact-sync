@@ -113,6 +113,11 @@ class GoogleContacts:
     def __exit__(self, *exc_info):
         self.session.close()
 
+    def fetch_photo(self, url: str) -> bytes:
+        resp = self.session.get(url, timeout=60, headers={"Authorization": f"Bearer {self._token()}"})
+        resp.raise_for_status()
+        return resp.content
+
     def fetch_contacts(self) -> list[dict]:
         return self._list("people/me/connections", "connections",
                           {"personFields": PERSON_FIELDS, "pageSize": 1000})

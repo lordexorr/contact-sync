@@ -2,7 +2,7 @@
 
 Keeps contacts in sync across any number of iCloud and Google accounts, as one combined list. It checks once a day and whenever you press **Check now**, and writes nothing to any account until you apply the changes yourself.
 
-**Current build: connection check only.** It reads every account and shows how many contacts and groups it found.
+**Current build: review only.** It reads every account and shows what a sync would change. It never writes to any account.
 
 ## Setup
 
@@ -43,6 +43,17 @@ Use a computer for this. The copy-and-paste step is awkward on a phone.
 5. Repeat for each Google account.
 
 Then press **Check now**. Each account should show its contact count.
+
+## Reviewing changes
+
+After each check, the **Review** section at the top of the Contact Sync page counts what a sync would change. **Open the review** shows the details.
+
+- **Possible matches:** two contacts that might be the same person: the same name with no phone number or email address in common, or the same phone number or email address under different names. Choose **Same person** or **Different people**.
+- **Different values:** a name, nickname, company, job title, birthday, note or photo that differs between accounts. The value from the most recently changed contact is selected; pick another and press **Use the selected value** to change it.
+- **Changes:** everything each account would get: new contacts; missing phone numbers, emails, addresses, websites, related names, birthdays and photos; labels such as "PREF" replaced with real ones; and groups to create or add contacts to. Google labels count as groups. Untick anything you don't want and press **Save choices**.
+- **Start over** forgets every match, choice and skip.
+
+Contacts are matched automatically when they share a phone number or email address and their names agree. Your decisions are kept for later checks.
 
 ## Where things are kept
 

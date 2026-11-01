@@ -1,5 +1,4 @@
 """Read access to an iCloud address book over CardDAV."""
-import re
 import xml.etree.ElementTree as ET
 from urllib.parse import urljoin, urlparse
 
@@ -19,11 +18,6 @@ class ICloudError(Exception):
     pass
 
 
-def is_group(vcard: str) -> bool:
-    """iCloud keeps each contact group as its own vCard, alongside the contacts."""
-    return re.search(r"^X-ADDRESSBOOKSERVER-KIND:group\s*$", vcard, re.I | re.M) is not None
-
-
 class ICloudAddressBook:
     """One iCloud account's address book. Use it in a with block so its connection is closed."""
 
@@ -37,6 +31,12 @@ class ICloudAddressBook:
 
     def __exit__(self, *exc_info):
         self.session.close()
+
+    def fetch_photo(self, url: str) -> bytes:
+        """A contact photo, which iCloud keeps as a separate file at the address in the vCard."""
+        resp = self.session.get(url, timeout=60)
+        resp.raise_for_status()
+        return resp.content
 
     def fetch_all(self) -> list[dict]:
         """Every item in the address book, contacts and groups alike, as {href, etag, vcard}."""

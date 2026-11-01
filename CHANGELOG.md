@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.0
+
+Review page. Still read-only: nothing is written to any account.
+
+- Matches the same person across every account: automatically when they share a phone number or email address and their names agree; otherwise, when the names differ or only the name matches, as a possible match for you to confirm or reject.
+- Lists every change a sync would make, for each account: new contacts, missing phone numbers, emails, addresses, websites and related names, birthdays, and photos. Untick any change to skip it.
+- Where accounts disagree on a name, nickname, company, job title, birthday, note or photo, you pick which value wins; the most recently changed one is preselected.
+- Labels left behind by other sync tools, such as "PREF", are replaced with real ones.
+- Google labels and iCloud groups are kept in step: groups an account lacks are created there, and contacts are added to the groups they belong to.
+- Photos are compared by what they show, so the same picture in two accounts counts as the same even after re-compression.
+- Matches, choices and skips are kept between checks. **Start over** forgets them.
+
 ## 0.1.2
 
 - Contact Sync page: new iCloud accounts section listing each configured iCloud account, and where to add or change them.
