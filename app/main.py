@@ -177,7 +177,9 @@ async def review_pick(request: web.Request) -> web.Response:
 
 async def review_label(request: web.Request) -> web.Response:
     form = await request.post()
-    review.pick(str(form.get("id", "")), str(form.get("label", "")))
+    label = str(form.get("label", "")).strip()[:40]
+    if label != review.CUSTOM:
+        review.pick(str(form.get("id", "")), label)
     return web.Response(status=204)
 
 
@@ -454,6 +456,10 @@ table.compare th,table.compare td{font-size:14px}
 table.compare tbody th{font-weight:normal;min-width:150px}
 table.compare td.after{min-width:180px;background:color-mix(in srgb,var(--ok) 14%,transparent)}
 table.compare td.after select{background:transparent;border-color:var(--ok)}
+.custom{display:flex;gap:6px;margin-top:6px}
+.custom[hidden]{display:none}
+.custom input[type=text]{width:10em;padding:3px 6px}
+.custom button{padding:3px 10px}
 .old{text-decoration:line-through;opacity:.55}
 img.thumb.old{opacity:.4}
 img.thumb.new{outline:2px solid var(--ok);outline-offset:2px}

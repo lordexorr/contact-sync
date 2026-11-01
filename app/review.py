@@ -10,6 +10,7 @@ from .model import Contact
 from .settings import PRIVATE_DIR
 
 DECISIONS_FILE = PRIVATE_DIR / "decisions.json"
+CUSTOM = "__custom__"  # the label dropdown's Custom… choice, which is never saved as a label
 esc = html.escape
 _lock = threading.Lock()
 
@@ -303,9 +304,12 @@ def _after(after: dict) -> str:
             for i in after["items"]
         )
     if kind == "label":
+        # Custom… opens a box for typing any label; iCloud and Google both keep custom labels as typed.
         options = "".join(f"<option value='{esc(v)}'{' selected' if v == after['chosen'] else ''}>{esc(text)}</option>"
-                          for v, text in after["options"])
-        return f"<select class='label' autocomplete='off' data-id='{esc(after['id'])}'>{options}</select>"
+                          for v, text in after["options"]) + f"<option value='{CUSTOM}'>Custom…</option>"
+        return (f"<select class='label' autocomplete='off' data-id='{esc(after['id'])}'>{options}</select>"
+                "<span class='custom' hidden><input type='text' autocomplete='off' maxlength='40' placeholder='Label'>"
+                f"<button type='button' class='custom-save' data-id='{esc(after['id'])}'>Save</button></span>")
     details = (f"<details><summary class='muted'>Details</summary>{esc(after['details'])}</details>"
                if after.get("details") else "")
     return f"<div>{esc(after['value'])}</div>{details}"
@@ -491,7 +495,11 @@ async function save(url, data) {
 document.addEventListener('change', e => {
   const t = e.target;
   if (t.matches('input.skip')) save('review/skip', {id: t.dataset.id, keep: t.checked ? '1' : ''});
-  else if (t.matches('select.label')) save('review/label', {id: t.dataset.id, label: t.value});
+  else if (t.matches('select.label')) {
+    const box = t.nextElementSibling;
+    if (t.value === '__custom__') { box.hidden = false; box.querySelector('input').focus(); }
+    else { box.hidden = true; save('review/label', {id: t.dataset.id, label: t.value}); }
+  }
   else if (t.matches('input.pick')) save('review/pick', {conflict: t.dataset.conflict, choice: t.value});
 });
 document.addEventListener('click', e => {
@@ -499,6 +507,14 @@ document.addEventListener('click', e => {
   if (b) { b.disabled = true; save('review/match', {pair: b.dataset.pair, decision: b.dataset.decision}); }
   const d = e.target.closest('button.dup');
   if (d) { d.disabled = true; save('review/duplicate', {id: d.dataset.id, decision: d.dataset.decision}); }
+  const c = e.target.closest('button.custom-save');
+  if (c) {
+    const label = c.previousElementSibling.value.trim();
+    if (label) { c.disabled = true; save('review/label', {id: c.dataset.id, label: label}); }
+  }
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && e.target.matches('.custom input')) { e.preventDefault(); e.target.nextElementSibling.click(); }
 });
 window.addEventListener('load', () => {
   const y = sessionStorage.getItem('reviewScroll');

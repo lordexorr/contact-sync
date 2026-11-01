@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.6
+
+- Label dropdowns end with **Custom…**, which opens a box to type any label, such as "Facebook" or "Personal". iCloud and Google both keep it as typed.
+
 ## 0.3.5
 
 - Answered possible matches move to a collapsed **Decided** section instead of disappearing, each with your answer and a button to change it, so one answer can be changed without forgetting every decision.

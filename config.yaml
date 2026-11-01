@@ -1,5 +1,5 @@
 name: Contact Sync
-version: "0.3.5"
+version: "0.3.6"
 slug: contact_sync
 description: Keeps contacts in sync across iCloud and Google accounts. Checks daily and writes nothing until you apply the changes.
 arch:
