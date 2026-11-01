@@ -236,8 +236,8 @@ def google_card(state: State) -> str:
     ) or "<li class='muted'>None connected yet.</li>"
     if not state.google_configured:
         action = (
-            "<p class='muted'>Add the Google client ID and secret on the add-on's Configuration tab, "
-            "then restart the add-on.</p>"
+            "<p class='muted'>Add the client ID and secret in the Google section of the add-on's "
+            "Configuration tab, then restart the add-on.</p>"
         )
     elif state.google_sign_in:
         action = (

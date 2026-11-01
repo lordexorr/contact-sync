@@ -25,7 +25,7 @@ Changing an Apple ID's main password revokes its app-specific passwords. If that
 
 ### 3. Configure the add-on
 
-On the **Configuration** tab, enter the Google client ID and secret. Under **iCloud accounts**, add one entry per iCloud account: a label of your choice (shown on the Contact Sync page), its Apple ID, and its app-specific password. Save, then restart the add-on. On the **Info** tab, turn on **Show in sidebar**.
+On the **Configuration** tab, open the **Google** section and enter the client ID and secret. Under **iCloud accounts**, press **Add** for each iCloud account and enter a label of your choice (shown on the Contact Sync page), its Apple ID, and its app-specific password. Save, then restart the add-on. On the **Info** tab, turn on **Show in sidebar**.
 
 ### 4. Connect each Google account
 
