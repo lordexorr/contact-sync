@@ -1,7 +1,9 @@
-"""One pass over every account. Read-only: it never writes to any account."""
+"""Reading the accounts: every contact in one pass, or a few contacts for applying one person's changes.
+Read-only: it never writes to any account."""
 import logging
 import re
 import threading
+from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -109,6 +111,83 @@ def read_accounts(options: dict) -> _Run:
         run.raw = {key: data for key, data in run.raw.items() if kept(key)}
     run.fingerprints.save()
     return run
+
+
+def read_some(options: dict, refs: list[str], new_groups: dict[str, list[str]] | None = None) -> _Run:
+    """Fresh copies of a few contacts, plus every account's groups, without reading every contact. raw holds
+    just those contacts and the groups (iCloud group cards are found in the latest snapshot, plus any in
+    new_groups). Contacts that no longer exist are left out. The caller holds check_lock."""
+    wanted = defaultdict(list)
+    for ref in refs:
+        account, _, cid = ref.partition("|")
+        wanted[account].append(cid)
+    run = _Run()
+    for a in options["icloud_accounts"]:
+        if not a["apple_id"] or not a["app_password"]:
+            continue
+        key = f"icloud:{a['apple_id']}"
+        snapshot = storage.read_json(_snapshot_path(f"icloud-{a['apple_id']}"), [])
+        hrefs = list(dict.fromkeys(wanted[key] + [i["href"] for i in vcard.groups(snapshot).values()]
+                                   + (new_groups or {}).get(key, [])))
+        with ICloudAddressBook(a["apple_id"], a["app_password"]) as book:
+            items = book.fetch(hrefs)
+            contacts, groups, photo_refs = vcard.read(key, items)
+            for c in contacts:
+                if c.id in photo_refs:
+                    c.photo = run.fingerprints.get(photo_refs[c.id], book.fetch_photo)
+        run.accounts.append({"key": key, "name": a["label"] or "iCloud", "groups": groups})
+        run.contacts += [c.to_dict() for c in contacts]
+        run.raw[key] = {"book": book.book, "items": items, "photos": photo_refs}
+    for a in google_accounts():
+        key = f"google:{a['email']}"
+        with GoogleContacts(a["refresh_token"], options["google_client_id"], options["google_client_secret"]) as api:
+            persons = [p for p in (api.fetch_contact(rn) for rn in wanted[key]) if p]
+            groups = [g for g in api.fetch_groups() if g.get("groupType") == "USER_CONTACT_GROUP"]
+            group_names = {g["resourceName"]: g["name"] for g in groups}
+            photo_urls = {}
+            for person in persons:
+                c, photo_url = people.read(key, person, group_names)
+                if photo_url:
+                    c.photo = run.fingerprints.get(("url", photo_url), api.fetch_photo)
+                    photo_urls[c.id] = photo_url
+                run.contacts.append(c.to_dict())
+        run.accounts.append({"key": key, "name": a["email"], "groups": list(group_names.values())})
+        run.raw[key] = {"people": persons, "groups": groups, "photos": photo_urls}
+    return run
+
+
+def merge_records(run: _Run, replaced: set[str]) -> None:
+    """Put a partial read into the saved records and snapshots: each contact in replaced is swapped for its
+    fresh copy, or dropped if it's gone, and each account's groups are brought up to date."""
+    with _state_lock:
+        records = load_records()
+        if not records:
+            return
+        records["contacts"] = [c for c in records["contacts"] if f"{c['account']}|{c['id']}" not in replaced]
+        records["contacts"] += run.contacts
+        groups = {a["key"]: a["groups"] for a in run.accounts}
+        for account in records["accounts"]:
+            account["groups"] = groups.get(account["key"], account["groups"])
+        storage.write_json(RECORDS_FILE, records)
+        for key, data in run.raw.items():
+            service, _, login = key.partition(":")
+            path = _snapshot_path(f"{service}-{login}")
+            gone = {ref.partition("|")[2] for ref in replaced if ref.startswith(key + "|")}
+            if service == "icloud":
+                _merge_items(path, data["items"], gone, "href", None)
+            else:
+                _merge_items(path, data["people"], gone, "resourceName", data["groups"])
+
+
+def _merge_items(path: Path, fresh: list[dict], gone: set[str], id_key: str, groups: list | None) -> None:
+    snapshot = storage.read_json(path, None)
+    if snapshot is None:
+        return
+    items = snapshot if groups is None else snapshot["people"]
+    by_id = {i[id_key]: i for i in fresh}
+    items = [by_id.pop(i[id_key], i) for i in items if i[id_key] not in gone or i[id_key] in by_id]
+    items += list(by_id.values())
+    storage.write_json(path, items if groups is None else {"people": items, "groups": groups})
 
 
 def _result(service: str, name: str, login: str) -> dict:

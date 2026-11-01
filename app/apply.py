@@ -8,6 +8,7 @@ import uuid
 from collections import Counter
 from contextlib import ExitStack
 from datetime import datetime, timezone
+from pathlib import Path
 from urllib.parse import urlparse
 
 import requests
@@ -70,8 +71,21 @@ def run(options: dict, person: str | None, token: str, tz, progress: Progress) -
 
 
 def _apply(options: dict, person: str | None, token: str, tz, progress: Progress, result: dict) -> None:
-    progress.step = "Checking every account again"
-    raw = check.read_accounts(options).raw
+    # Applying everyone reads and backs up every account. Applying one person reads and backs up only their
+    # cards, plus the groups, so it's quick; the review's other people stay as the latest check found them.
+    if person is None:
+        progress.step = "Checking every account again"
+        raw = check.read_accounts(options).raw
+    else:
+        progress.step = "Checking this person's cards again"
+        reviewed = review.current_plan(options)
+        refs = (reviewed or {}).get("sync", {}).get("people", {}).get(person, {}).get("refs")
+        if not refs:
+            result["status"], result["message"] = "stopped", STOPPED
+            return
+        run = check.read_some(options, refs)
+        check.merge_records(run, set(refs))
+        raw = run.raw
     before = review.current_plan(options)
     if before is None:
         result["status"], result["message"] = "stopped", STOPPED
@@ -89,14 +103,22 @@ def _apply(options: dict, person: str | None, token: str, tz, progress: Progress
                           + len(p["drop"]) for p in work["people"].values()) + len(work["groups"]))
     with ExitStack() as stack:
         accounts = _Accounts(options, raw, stack)
-        progress.step = "Backing up every account"
-        result["backup"] = _backup(raw, work, accounts, tz)
+        progress.step = "Backing up every account" if person is None else "Backing up this person's cards"
+        folder = _backup(raw, work, accounts, tz, result["person"])
+        result["backup"] = folder.name
         progress.step = "Making the changes"
         writer = _Writer(accounts, work, progress, result)
-        writer.run()
+        try:
+            writer.run()
+        finally:
+            _write_summary(folder, result, tz)
 
     progress.step = "Checking the result"
-    check.read_accounts(options)
+    if person is None:
+        check.read_accounts(options)
+    else:
+        refs = set(before["sync"]["people"][person]["refs"]) | set(writer.created.values())
+        check.merge_records(check.read_some(options, sorted(refs), writer.new_groups), refs)
     loaded = review.current_records(options)
     if loaded:
         contacts, accounts_now = loaded
@@ -175,10 +197,12 @@ def _image(data: bytes) -> tuple[bytes, str]:
 
 # --- Backup ---
 
-def _backup(raw: dict, work: dict, accounts: _Accounts, tz) -> str:
-    """Save every account as the check read it, as .json and as a .vcf file that Contacts apps can import,
-    plus the full-size photo of every contact about to be changed or deleted. Keeps the latest backups."""
-    folder = BACKUP_DIR / datetime.now(tz).strftime("%Y-%m-%d_%H-%M-%S")
+def _backup(raw: dict, work: dict, accounts: _Accounts, tz, person: str) -> Path:
+    """Save what was read, as .json and as a .vcf file that Contacts apps can import, plus the full-size photo
+    of every contact about to be changed or deleted, named after the person. For one person (named in
+    person), what was read is just their cards, and the folder carries their name. Keeps the latest backups."""
+    stamp = datetime.now(tz).strftime("%Y-%m-%d_%H-%M-%S")
+    folder = BACKUP_DIR / (f"{stamp} {_safe(person)}" if person else stamp)
     for key, data in raw.items():
         name = _file_name(key)
         if key.startswith("icloud:"):
@@ -190,27 +214,58 @@ def _backup(raw: dict, work: dict, accounts: _Accounts, tz) -> str:
             cards = [vcard.new(str(uuid.uuid4()).upper(), plan.contact_changes(people.read(key, p, group_names)[0]))
                      for p in data["people"]]
         (folder / f"{name}.vcf").write_bytes("".join(c.rstrip("\r\n") + "\r\n" for c in cards).encode())
-    touched = {e["ref"] for p in work["people"].values() for e in p["update"].values()}
-    touched |= {ref for p in work["people"].values() for ref in p["delete"] + p["drop"]}
-    for ref in sorted(touched):
+    touched = {}  # ref -> the person's name
+    for p in work["people"].values():
+        touched |= {ref: p["name"] for ref in [e["ref"] for e in p["update"].values()] + p["delete"] + p["drop"]}
+    for ref, who in sorted(touched.items(), key=lambda item: (fold(item[1]), item[0])):
         if accounts.has_photo(ref):
             try:
                 data, kind = accounts.photo(ref)
             except Exception as err:  # a missing photo copy mustn't stop the backup
                 log.warning("Couldn't back up a contact photo: %s", err)
                 continue
-            key, _, cid = ref.partition("|")
-            path = folder / "photos" / _file_name(key) / f"{_file_name(cid.rsplit('/', 1)[-1])}.{kind.lower()}"
+            path = folder / "photos" / _file_name(ref.partition("|")[0]) / f"{_safe(who)}.{kind.lower()}"
+            n = 1
+            while path.exists():  # the same name twice, such as a duplicate card
+                n += 1
+                path = path.with_name(f"{_safe(who)} ({n}).{kind.lower()}")
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(data)
     backups = sorted(p for p in BACKUP_DIR.iterdir() if p.is_dir())
     for old in backups[:-KEEP_BACKUPS]:
         shutil.rmtree(old, ignore_errors=True)
-    return folder.name
+    return folder
+
+
+def _write_summary(folder: Path, result: dict, tz) -> None:
+    """What changed.txt in the backup folder: every change the apply made, and every one it didn't."""
+    now = datetime.now(tz)
+    when = f"{now:%a %b} {now.day}, {now.year}, {now.hour % 12 or 12}:{now:%M} {'AM' if now.hour < 12 else 'PM'}"
+    who = result["person"]
+    lines = [f"Contact Sync apply, {when}",
+             f"Applied: {who}'s changes only" if who else "Applied: everyone's changes", "",
+             (f"This folder holds {who}'s cards" if who else "This folder holds every account")
+             + " as they were just before these changes.", ""]
+    for title, changes in (("Made", [c for c in result["changes"] if not c["error"]]),
+                           ("Not made", [c for c in result["changes"] if c["error"]])):
+        if changes:
+            lines.append(f"{title} ({len(changes):,})")
+            lines += [f"  {c['subject']} · {c['account']}: {c['what']}" + (f" — {c['error']}" if c["error"] else "")
+                      for c in sorted(changes, key=lambda c: (fold(c["subject"]), c["account"]))]
+            lines.append("")
+    try:
+        (folder / "What changed.txt").write_bytes("\r\n".join(lines).encode())
+    except OSError as err:
+        log.warning("Couldn't write What changed.txt: %s", err)
 
 
 def _file_name(name: str) -> str:
     return re.sub(r"[^\w@.-]", "_", name.replace(":", "-"))
+
+
+def _safe(name: str) -> str:
+    """A person's name, usable as a file or folder name."""
+    return re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", name).strip(" .") or "contact"
 
 
 # --- Writing ---
@@ -230,6 +285,7 @@ class _Writer:
         self.failed: set[str] = set()  # people with a change that wasn't made
         self.failed_groups: set[str] = set()  # accounts where creating or deleting a group failed
         self.uids: dict[str, str] = {}  # ref -> UID of each iCloud contact made here
+        self.new_groups: dict[str, list[str]] = {}  # account -> addresses of iCloud groups made here
         raw = accounts.raw
         self._items = {k: {i["href"]: i for i in d["items"]} for k, d in raw.items() if k.startswith("icloud:")}
         self._groups = {k: vcard.groups(d["items"]) for k, d in raw.items() if k.startswith("icloud:")}
@@ -377,8 +433,9 @@ class _Writer:
                     conn.delete(item["href"], item["etag"])
             elif item is None:
                 uid = str(uuid.uuid4()).upper()
-                conn.put(urlparse(self.accounts.raw[account]["book"]).path + uid + ".vcf",
-                         vcard.group_card(uid, op["group"], add))
+                href = urlparse(self.accounts.raw[account]["book"]).path + uid + ".vcf"
+                conn.put(href, vcard.group_card(uid, op["group"], add))
+                self.new_groups.setdefault(account, []).append(href)
             else:
                 conn.put(item["href"], vcard.edit_members(item["vcard"], add, remove), item["etag"])
             return

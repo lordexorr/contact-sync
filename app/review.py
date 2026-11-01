@@ -357,7 +357,7 @@ def apply_body(review: dict | None, person: str | None, checking: bool) -> str:
     if checking:
         return f"{heading}<p class='muted'>A check is running. This page is ready once it finishes.</p>"
     return (
-        f"{heading}{_totals(work)}{notes_html}{_STEPS}"
+        f"{heading}{_totals(work)}{notes_html}{_steps(person in people)}"
         "<form method='post' action='apply' onsubmit=\"this.querySelector('button').disabled=true\">"
         f"<input type='hidden' name='person' value='{esc(person or '')}'>"
         f"<input type='hidden' name='token' value='{plan.digest(work)}'>"
@@ -391,17 +391,24 @@ def result_body(result: dict | None, progress, when) -> str:
     return "".join(parts)
 
 
-_STEPS = (
-    "<p>When you press <b>Apply now</b>, Contact Sync:</p><ol>"
-    "<li>Checks every account again, and stops without writing anything if something changed since this page "
-    "opened.</li>"
-    "<li>Backs up every account to <code>addon_configs/local_contact_sync/backups</code>, keeping the last 10 "
-    "backups.</li>"
-    "<li>Makes these changes. Only the details shown in the review are touched; everything else on each contact "
-    "stays as it is.</li>"
-    "<li>Checks again and records what every account holds, so later reviews can tell a deletion from a detail "
-    "that was never synced.</li></ol>"
-)
+def _steps(one_person: bool) -> str:
+    if one_person:
+        read = ("Reads this person's cards again, and stops without writing anything if anything about them "
+                "changed since this page opened.")
+        backup = "Backs up their cards to a folder named after them"
+        record = "Reads their cards again and records what each account holds"
+    else:
+        read = "Checks every account again, and stops without writing anything if something changed since this page opened."
+        backup = "Backs up every account"
+        record = "Checks again and records what every account holds"
+    return (
+        f"<p>When you press <b>Apply now</b>, Contact Sync:</p><ol><li>{read}</li>"
+        f"<li>{backup} in <code>addon_configs/local_contact_sync/backups</code>, with a <code>What changed.txt</code> "
+        "file listing every change. The last 10 backups are kept.</li>"
+        "<li>Makes these changes. Only the details shown in the review are touched; everything else on each contact "
+        "stays as it is.</li>"
+        f"<li>{record}, so later reviews can tell a deletion from a detail that was never synced.</li></ol>"
+    )
 
 
 def _totals(work: dict) -> str:

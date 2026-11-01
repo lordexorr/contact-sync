@@ -68,6 +68,8 @@ Press **Apply changes…** at the top of the review to apply every ticked change
 3. Makes the changes, touching only the details shown in the review. Everything else on each contact stays as it is, including details only one service has. Photos are copied at full size.
 4. Checks again and records what every account now holds.
 
+Applying one person is quicker: it reads, backs up and rechecks only that person's cards, plus the groups, instead of every contact. It stops only if something about that person changed. Everyone else in the review stays as the latest check found them.
+
 The results page lists every change made and every one that wasn't, with the reason. A person with a failed change stays in the review, so applying again retries it.
 
 - People in an unanswered possible match are left out until you answer it, so a sync can't create a second copy of someone.
@@ -87,11 +89,13 @@ Until the first apply, nothing counts as deleted.
 
 ### Backups
 
-Before writing, every account is saved to `addon_configs/local_contact_sync/backups`, in a folder named for the date and time. The last 10 backups are kept. Each account has:
+Before writing, Contact Sync saves a backup to `addon_configs/local_contact_sync/backups`. The last 10 backups are kept. Each is a folder named for the date and time it was made, such as `2026-11-01_14-05-12`. Applying everyone backs up every account. Applying one person backs up only their cards, and the folder name ends with theirs, such as `2026-11-01_14-05-12 Jane Smith`.
 
-- a `.vcf` file, which iCloud.com, Google Contacts and the Contacts apps can import;
-- a `.json` file with everything as the service sent it;
-- under `photos`, the full-size photo of every contact the apply changed or deleted.
+Each folder holds:
+
+- `What changed.txt`, listing every change that apply made and every one it didn't, by contact and account. It's the way to find the backup from just before a change you want to undo.
+- For each account, a `.vcf` file, which iCloud.com, Google Contacts and the Contacts apps can import, and a `.json` file with everything as the service sent it.
+- Under `photos`, the full-size photo of every contact the apply changed or deleted, named after the person.
 
 Importing a `.vcf` file adds its contacts as new ones, next to any already there.
 

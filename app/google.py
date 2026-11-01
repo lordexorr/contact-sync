@@ -127,6 +127,16 @@ class GoogleContacts:
         return self._list("people/me/connections", "connections",
                           {"personFields": PERSON_FIELDS, "pageSize": 1000})
 
+    def fetch_contact(self, resource: str) -> dict | None:
+        """One contact; None if it no longer exists."""
+        resp = self.session.get(f"{PEOPLE_API}/{resource}", params={"personFields": PERSON_FIELDS}, timeout=60,
+                                headers={"Authorization": f"Bearer {self._token()}"})
+        if resp.status_code == 404:
+            return None
+        if resp.status_code != 200:
+            raise GoogleError(f"Google answered {resource} with HTTP {resp.status_code}: {_error_text(resp)}")
+        return resp.json()
+
     def fetch_groups(self) -> list[dict]:
         return self._list("contactGroups", "contactGroups",
                           {"groupFields": "name,groupType,memberCount", "pageSize": 1000})

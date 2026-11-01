@@ -51,6 +51,14 @@ class ICloudAddressBook:
         if resp.status_code != 404:  # already gone
             _check_write(resp)
 
+    def fetch(self, hrefs: list[str]) -> list[dict]:
+        """Only these items, as {href, etag, vcard}; any that no longer exist are left out."""
+        self.book = book = self._find_address_book()
+        items = []
+        for start in range(0, len(hrefs), MULTIGET_BATCH):
+            items += self._multiget(book, hrefs[start:start + MULTIGET_BATCH])
+        return items
+
     def fetch_all(self) -> list[dict]:
         """Every item in the address book, contacts and groups alike, as {href, etag, vcard}."""
         self.book = book = self._find_address_book()

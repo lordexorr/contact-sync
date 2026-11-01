@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.2
+
+- Applying one person is quicker: it reads, backs up and rechecks only that person's cards and the groups, instead of every contact, and stops only if something about that person changed.
+- Every backup folder has a `What changed.txt` listing every change that apply made and every one it didn't, so you can tell which backup is from just before a change.
+- A one-person backup holds just their cards, in a folder whose name ends with theirs. Backed-up photos are named after the person.
+
 ## 0.3.1
 
 - Duplicates within one account are now a decision, like possible matches. Each shows every card side by side, with **Merge into one** and **Keep both**. Merging keeps the card with the most details, moves everything from the other cards onto it, including details Contact Sync doesn't otherwise use such as dates, social profiles and messaging handles, then deletes the others when you apply. Until you choose, the extra cards are left alone.
