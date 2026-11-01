@@ -383,8 +383,10 @@ details.fold{margin-top:16px}
 details.fold>summary{cursor:pointer;font-weight:600}
 table.compare th,table.compare td{font-size:14px}
 table.compare tbody th{font-weight:normal;min-width:150px}
-table.compare td.changing{background:color-mix(in srgb,var(--accent) 16%,transparent)}
-table.compare td.after{min-width:180px}
+table.compare td.after{min-width:180px;background:color-mix(in srgb,var(--ok) 14%,transparent)}
+.old{text-decoration:line-through;opacity:.55}
+img.thumb.old{opacity:.4}
+.new{color:var(--ok)}
 td details{margin-top:4px}
 label.value{display:block}
 .toast{position:fixed;right:16px;bottom:16px;padding:8px 14px;border-radius:8px;background:var(--ok);color:#fff}

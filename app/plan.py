@@ -193,8 +193,17 @@ def _row(row_id: str, title: str, cells: dict, changing: list[str], names: dict,
             "skipped": row_id in skips}
 
 
+def _was(text: str, changing: bool) -> dict:
+    """A cell item for an account's current value: marked "old" when the sync would replace it, or "add" when
+    the account has nothing and the sync would fill it in."""
+    if not changing:
+        return {"text": text or "—"}
+    return {"text": text, "state": "old"} if text else {"text": "—", "state": "add"}
+
+
 def _contact_row(key: str, first: dict, missing: list[str], merged: dict, names: dict, skips: set) -> dict:
-    cells = {names[a]: ["Has this contact"] for a in first} | {names[a]: ["Not in this account"] for a in missing}
+    cells = ({names[a]: [{"text": "Has this contact"}] for a in first}
+             | {names[a]: [{"text": "Not in this account", "state": "add"}] for a in missing})
     after = {"kind": "text", "value": "In every account", "details": _details(merged)}
     return _row(f"{key}|new", "Contact", cells, missing, names, after, skips)
 
@@ -209,14 +218,15 @@ def _field_rows(key: str, first: dict, merged: dict, names: dict, skips: set) ->
         have = {a: c.name() if field == "name" else getattr(c, field) for a, c in first.items()}
         changing = [a for a, old in have.items() if (old != new if field == "birthday" else fold(old) != fold(new))]
         if changing:
-            cells = {names[a]: [show(field, old) or "—"] for a, old in have.items()}
+            cells = {names[a]: [_was(show(field, old), a in changing)] for a, old in have.items()}
             rows.append(_row(f"{key}|field:{field}", title, cells, changing, names,
                              {"kind": "text", "value": show(field, new)}, skips))
     photo = merged["photo"]
     if photo:
         changing = [a for a, c in first.items() if c.photo != "?" and not (c.photo and photos.same(c.photo, photo))]
         if changing:
-            cells = {names[a]: [{"thumb": c.photo}] if c.photo not in ("", "?") else ["—"] for a, c in first.items()}
+            cells = {names[a]: [{"thumb": c.photo, "state": "old" if a in changing else ""}]
+                     if c.photo not in ("", "?") else [_was("", a in changing)] for a, c in first.items()}
             rows.append(_row(f"{key}|field:photo", "Photo", cells, changing, names,
                              {"kind": "photo", "thumb": photo}, skips))
     for field, noun in MULTI.items():
@@ -236,7 +246,8 @@ def _list_rows(key: str, field: str, noun: str, first: dict, merged: dict, names
             row_id = f"{key}|{field}~{v.key}"  # also the id of the label picked in the dropdown
             seen = {m.label for m in holders.values() if m.label}
             options = list(dict.fromkeys(LABEL_CHOICES[field] + sorted(seen, key=str.lower) + [v.label]))
-            cells = {names[a]: ["PREF" if m.odd else label_text(m.label)] for a, m in holders.items()}
+            cells = {names[a]: [_was("PREF" if m.odd else label_text(m.label), a in changing)]
+                     for a, m in holders.items()}
             after = {"kind": "label", "id": row_id, "options": [(o, label_text(o)) for o in options], "chosen": v.label}
             rows.append(_row(row_id, f"Label of {v.value}", cells, changing, names, after, skips))
     by_label = defaultdict(list)
@@ -250,7 +261,12 @@ def _list_rows(key: str, field: str, noun: str, first: dict, merged: dict, names
             continue
         label = values[0].label
         title = f"{label_text(label)} {noun}" if label else f"{noun} (no label)"
-        cells = {names[a]: [h[v.key].value for v in values if v.key in h] or ["—"] for a, h in held.items()}
+        cells = {}
+        for a, h in held.items():
+            # What the account has, with values being left out marked "old", then values it would gain as "new".
+            now = [{"text": h[v.key].value, "state": "" if v.key in kept else "old"} for v in values if v.key in h]
+            now += [{"text": v.value, "state": "new"} for v in values if v.key in kept and v.key not in h]
+            cells[names[a]] = now or [{"text": "—"}]
         items = [{"id": f"{key}|{field}={v.key}", "text": v.value, "kept": v.key in kept} for v in values]
         rows.append(_row(f"{key}|{field}:{label.lower()}", title[0].upper() + title[1:], cells, changing, names,
                          {"kind": "values", "items": items}, skips))
@@ -265,8 +281,14 @@ def _group_rows(accounts, names, spelling, members, to_group, totals, skips) -> 
         changing = [a for a in names if g not in have[a] or to_group.get((a, g))]
         if not changing:
             continue
-        cells = {names[a]: [_count(members[(a, g)], "member") if g in have[a] else "Not in this account"]
-                 for a in names}
+        cells = {}
+        for a in names:
+            adds = len(to_group.get((a, g), []))
+            if g not in have[a]:
+                cells[names[a]] = [{"text": "Not in this account", "state": "add"}]
+            else:
+                cells[names[a]] = ([{"text": _count(members[(a, g)], "member")}]
+                                   + ([{"text": f"{adds:,} more", "state": "new"}] if adds else []))
         details = "; ".join(f"Adds to {names[a]}: {', '.join(sorted(to_group[(a, g)], key=fold))}"
                             for a in names if to_group.get((a, g)))
         after = {"kind": "text", "value": f"In every account, {_count(totals[g], 'member')}", "details": details}

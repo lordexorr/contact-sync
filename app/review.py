@@ -170,9 +170,10 @@ def _changes(review: dict) -> str:
     waiting, ignored = tables(False), tables(True)
     count = sum(r["skipped"] for p in review["people"] for r in p["rows"]) + sum(r["skipped"] for r in review["groups"])
     legend = (
-        "<p class='muted'>Each table shows what every account has now, and in the last column what all of them "
-        "will have after the sync. Shaded cells are the ones that would change. Untick a row to leave every "
-        "account as it is. In a list, untick a value to leave it out of every account.</p>"
+        "<p class='muted'>Each table shows what every account has now, and in the green last column what all of "
+        "them will have after the sync. Struck-through values would be replaced or removed, and values marked + "
+        "would be added. Untick a row to leave every account as it is. In a list, untick a value to leave it out "
+        "of every account.</p>"
     )
     folded = (f"<details class='fold'><summary>Ignored ({count:,})</summary><p class='muted'>Tick a row "
               f"to bring it back.</p>{''.join(ignored)}</details>" if ignored else "")
@@ -194,15 +195,27 @@ def _row(row: dict, columns: list[str]) -> str:
     # row that moved to Ignored hands its unticked look to the row that took its place.
     box = (f"<label><input type='checkbox' class='skip' autocomplete='off' data-id='{esc(row['id'])}'"
            f"{'' if row['skipped'] else ' checked'}> {esc(row['title'])}</label>")
-    cells = []
-    for c in columns:
-        shade = " class='changing'" if c in row["changing"] else ""
-        cells.append(f"<td{shade}>{_cell(row['cells'].get(c, []))}</td>")
-    return f"<tr><th>{box}</th>{''.join(cells)}<td class='after'>{_after(row['after'])}</td></tr>"
+    cells = "".join(f"<td>{_cell(row['cells'].get(c, []))}</td>" for c in columns)
+    return f"<tr><th>{box}</th>{cells}<td class='after'>{_after(row['after'])}</td></tr>"
 
 
-def _cell(items: list) -> str:
-    return "".join(f"<div>{esc(i)}</div>" if isinstance(i, str) else _thumb(i["thumb"]) for i in items)
+def _cell(items: list[dict]) -> str:
+    """An account's current values: struck through when the sync replaces or removes them ("old"), "+" for
+    values it would gain ("new"), and a note on an empty cell the sync would fill ("add")."""
+    out = []
+    for i in items:
+        state = i.get("state", "")
+        if "thumb" in i:
+            out.append(_thumb(i["thumb"], "old" if state == "old" else ""))
+        elif state == "old":
+            out.append(f"<div class='old'>{esc(i['text'])}</div>")
+        elif state == "new":
+            out.append(f"<div class='new'>+ {esc(i['text'])}</div>")
+        elif state == "add":
+            out.append(f"<div>{esc(i['text'])} <span class='new'>· will be added</span></div>")
+        else:
+            out.append(f"<div>{esc(i['text'])}</div>")
+    return "".join(out)
 
 
 def _after(after: dict) -> str:
@@ -225,8 +238,8 @@ def _after(after: dict) -> str:
     return f"<div>{esc(after['value'])}</div>{details}"
 
 
-def _thumb(fingerprint: str) -> str:
-    return f"<img class='thumb' src='thumb/{esc(fingerprint)}.jpg' alt=''>"
+def _thumb(fingerprint: str, extra_class: str = "") -> str:
+    return f"<img class='thumb {extra_class}' src='thumb/{esc(fingerprint)}.jpg' alt=''>"
 
 
 def _duplicates(items: list[dict]) -> str:

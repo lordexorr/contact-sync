@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.7
+
+- Clearer colors in the comparison tables: the **After sync** column is green, values that would be replaced or removed are struck through, values an account would gain are marked + in green, and an empty cell the sync would fill says "will be added". Account cells are no longer shaded.
+
 ## 0.2.6
 
 - Fixed: after unticking a row, the row that moved into its place could look unticked too. The browser was restoring tick boxes, dropdowns and choices by position when the page reloaded; the review now always shows what's actually saved.
