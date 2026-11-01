@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.2
+
+- Contact Sync page: new iCloud accounts section listing each configured iCloud account, and where to add or change them.
+- Setup guide: step-by-step instructions for creating the Google Cloud project, the OAuth consent screen's correct place in the console's left menu, and a new Branding step (home page, privacy policy link and authorized domain, no logo) that Google requires before the app can be published.
+- Added this changelog and a README.
+
 ## 0.1.1
 
 - The Configuration tab has a separate Google section for the client ID and secret, and every field has a name and help text.

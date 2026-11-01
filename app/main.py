@@ -188,7 +188,7 @@ def render(request: web.Request) -> str:
         f"<base href='{base}'>{refresh}<title>Contact Sync</title><style>{STYLE}</style></head>"
         "<body><main><h1>Contact Sync</h1>"
         "<p class='muted'>Read-only for now: it reads every account and never writes to any of them.</p>"
-        f"{notice}{accounts_card(state)}{google_card(state)}</main></body></html>"
+        f"{notice}{accounts_card(state)}{icloud_card(state)}{google_card(state)}</main></body></html>"
     )
 
 
@@ -224,6 +224,20 @@ def account_row(a: dict) -> str:
         counts = f"<td class='num'>{a['contacts']:,}</td><td class='num'>{a['groups']:,}</td>"
         status = "<span class='ok'>Connected</span>"
     return f"<tr><td>{esc(a['service'])} · {esc(a['name'])}{login}</td>{counts}<td>{status}</td></tr>"
+
+
+def icloud_card(state: State) -> str:
+    # iCloud accounts are set on the Configuration tab, where their passwords live, so this only lists them.
+    accounts = "".join(
+        f"<li class='row'><span>{esc(a['label'] or 'iCloud')}</span>"
+        f"<span class='muted'>{esc(a['apple_id'] or 'No Apple ID entered')}</span></li>"
+        for a in state.options["icloud_accounts"]
+    ) or "<li class='muted'>None added yet.</li>"
+    return (
+        f"<section class='card'><h2>iCloud accounts</h2><ul class='plain'>{accounts}</ul>"
+        "<p class='muted'>Add, change or remove iCloud accounts on the add-on's Configuration tab, "
+        "then restart the add-on.</p></section>"
+    )
 
 
 def google_card(state: State) -> str:
