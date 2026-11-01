@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.5
+
+- Changes are shown as a comparison table for each person: a column per account with what it has now, and an **After sync** column with what every account will have once you apply. Only details that differ get a row, and the cells that would change are shaded.
+- Lists are grouped by label, such as "Work address", so different values sit side by side. Untick a value in **After sync** to leave it out of every account, which removes it from any account that has it.
+- Label differences show every account's label next to each other, with the dropdown in **After sync**.
+- Groups have their own table, with each account's member count.
+- Rows unticked in an earlier version show ticked once more, except label fixes.
+
 ## 0.2.4
 
 - The review saves every click straight away: ticking or unticking a change, choosing a label, picking a value, or answering a possible match. There are no Save buttons any more; a short "Saved" note confirms each one, and the page keeps your place.

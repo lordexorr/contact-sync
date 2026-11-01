@@ -381,6 +381,12 @@ li details{margin:2px 0 0 26px}
 select{font:inherit;padding:3px 6px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--text)}
 details.fold{margin-top:16px}
 details.fold>summary{cursor:pointer;font-weight:600}
+table.compare th,table.compare td{font-size:14px}
+table.compare tbody th{font-weight:normal;min-width:150px}
+table.compare td.changing{background:color-mix(in srgb,var(--accent) 16%,transparent)}
+table.compare td.after{min-width:180px}
+td details{margin-top:4px}
+label.value{display:block}
 .toast{position:fixed;right:16px;bottom:16px;padding:8px 14px;border-radius:8px;background:var(--ok);color:#fff}
 .toast.error{background:var(--bad)}
 """

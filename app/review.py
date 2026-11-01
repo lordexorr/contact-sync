@@ -88,7 +88,7 @@ def page_body(review: dict | None) -> str:
     if review["conflicts"]:
         parts.append(_conflicts(review["conflicts"]))
     if review["people"] or review["groups"]:
-        parts.append(_changes(review["people"], review["groups"]))
+        parts.append(_changes(review))
     if review["duplicates"]:
         parts.append(_duplicates(review["duplicates"]))
     parts.append(
@@ -157,40 +157,74 @@ def _conflicts(items: list[dict]) -> str:
             "the value every account should have.</p>" f"{body}{folded}</section>")
 
 
-def _changes(people: list[dict], groups: list[dict]) -> str:
-    """Changes waiting first; unticked ones in a collapsed Ignored section, where ticking one brings it back."""
-    def blocks(skipped: bool) -> list[str]:
-        out = []
-        for name, changes in [(p["name"], p["changes"]) for p in people] + [("Groups", groups)]:
-            chosen = [c for c in changes if c["skipped"] == skipped]
-            if chosen:
-                out.append(f"<div class='item'><b>{esc(name)}</b><ul class='changes'>"
-                           f"{''.join(_checkbox(c) for c in chosen)}</ul></div>")
-        return out
+def _changes(review: dict) -> str:
+    """A comparison table per person, and one for groups. Rows still waiting first; unticked rows in a
+    collapsed Ignored section, where ticking one brings it back."""
+    columns = review["columns"]
 
-    waiting, ignored = blocks(False), blocks(True)
-    count = sum(c["skipped"] for p in people for c in p["changes"]) + sum(g["skipped"] for g in groups)
-    folded = (f"<details class='fold'><summary>Ignored ({count:,})</summary><p class='muted'>Tick a change "
+    def tables(skipped: bool) -> list[str]:
+        out = [_table(p["name"], columns, [r for r in p["rows"] if r["skipped"] == skipped]) for p in review["people"]]
+        out.append(_table("Groups", columns, [r for r in review["groups"] if r["skipped"] == skipped]))
+        return [t for t in out if t]
+
+    waiting, ignored = tables(False), tables(True)
+    count = sum(r["skipped"] for p in review["people"] for r in p["rows"]) + sum(r["skipped"] for r in review["groups"])
+    legend = (
+        "<p class='muted'>Each table shows what every account has now, and in the last column what all of them "
+        "will have after the sync. Shaded cells are the ones that would change. Untick a row to leave every "
+        "account as it is. In a list, untick a value to leave it out of every account.</p>"
+    )
+    folded = (f"<details class='fold'><summary>Ignored ({count:,})</summary><p class='muted'>Tick a row "
               f"to bring it back.</p>{''.join(ignored)}</details>" if ignored else "")
     body = "".join(waiting) or "<p class='muted'>Nothing waiting.</p>"
-    return f"<section class='card'><h2>Changes</h2>{body}{folded}</section>"
+    return f"<section class='card'><h2>Changes</h2>{legend}{body}{folded}</section>"
 
 
-def _checkbox(change: dict) -> str:
-    thumb = f"<img class='thumb' src='thumb/{esc(change['thumb'])}.jpg' alt=''>" if change["thumb"] else ""
-    details = (f"<details><summary class='muted'>Details</summary>{esc(change['details'])}</details>"
-               if change["details"] else "")
-    box = (f"<label><input type='checkbox' class='skip' data-id='{esc(change['id'])}'"
-           f"{'' if change['skipped'] else ' checked'}> ")
-    if label := change.get("label"):
-        # One line for every account that needs the label; the dropdown sits outside the <label> so
-        # using it doesn't tick or untick the box.
-        options = "".join(f"<option value='{esc(v)}'{' selected' if v == label['chosen'] else ''}>{esc(text)}</option>"
-                          for v, text in label["options"])
-        return (f"<li>{box}{esc(change['text'])}:</label> <select class='label' data-id='{esc(change['id'])}'>"
-                f"{options}</select> <span class='muted'>now {esc(label['now'])}</span></li>")
-    return (f"<li>{box}<span class='muted'>{esc(change['account'])}:</span> {esc(change['text'])}</label>"
-            f"{thumb}{details}</li>")
+def _table(title: str, columns: list[str], rows: list[dict]) -> str:
+    if not rows:
+        return ""
+    head = "".join(f"<th>{esc(c)}</th>" for c in columns)
+    body = "".join(_row(r, columns) for r in rows)
+    return (f"<div class='item'><b>{esc(title)}</b><div class='scroll'><table class='compare'><thead><tr><th></th>"
+            f"{head}<th>After sync</th></tr></thead><tbody>{body}</tbody></table></div></div>")
+
+
+def _row(row: dict, columns: list[str]) -> str:
+    box = (f"<label><input type='checkbox' class='skip' data-id='{esc(row['id'])}'"
+           f"{'' if row['skipped'] else ' checked'}> {esc(row['title'])}</label>")
+    cells = []
+    for c in columns:
+        shade = " class='changing'" if c in row["changing"] else ""
+        cells.append(f"<td{shade}>{_cell(row['cells'].get(c, []))}</td>")
+    return f"<tr><th>{box}</th>{''.join(cells)}<td class='after'>{_after(row['after'])}</td></tr>"
+
+
+def _cell(items: list) -> str:
+    return "".join(f"<div>{esc(i)}</div>" if isinstance(i, str) else _thumb(i["thumb"]) for i in items)
+
+
+def _after(after: dict) -> str:
+    kind = after["kind"]
+    if kind == "photo":
+        return _thumb(after["thumb"])
+    if kind == "values":
+        # One box per value: unticked means every account ends up without it.
+        return "".join(
+            f"<label class='value'><input type='checkbox' class='skip' data-id='{esc(i['id'])}'"
+            f"{' checked' if i['kept'] else ''}> {esc(i['text'])}</label>"
+            for i in after["items"]
+        )
+    if kind == "label":
+        options = "".join(f"<option value='{esc(v)}'{' selected' if v == after['chosen'] else ''}>{esc(text)}</option>"
+                          for v, text in after["options"])
+        return f"<select class='label' data-id='{esc(after['id'])}'>{options}</select>"
+    details = (f"<details><summary class='muted'>Details</summary>{esc(after['details'])}</details>"
+               if after.get("details") else "")
+    return f"<div>{esc(after['value'])}</div>{details}"
+
+
+def _thumb(fingerprint: str) -> str:
+    return f"<img class='thumb' src='thumb/{esc(fingerprint)}.jpg' alt=''>"
 
 
 def _duplicates(items: list[dict]) -> str:
