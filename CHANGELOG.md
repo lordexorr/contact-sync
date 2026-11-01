@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.2
+
+- Unticked changes move to a collapsed **Ignored** section at the bottom of the review, so the changes still waiting stay on top. Tick one there and press **Save choices** to bring it back.
+
 ## 0.2.1
 
 - Contacts with the same full name in different accounts are matched automatically, unless something contradicts it: both copies have phone numbers or emails but none in common, or both have birthdays on different days. A detail only one copy has, such as a birthday, isn't a contradiction; it shows up as a change instead. The same name twice in one account is still asked about.

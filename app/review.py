@@ -144,13 +144,25 @@ def _conflicts(items: list[dict]) -> str:
 
 
 def _changes(people: list[dict], groups: list[dict]) -> str:
-    blocks = [f"<div class='item'><b>{esc(p['name'])}</b><ul class='changes'>"
-              f"{''.join(_checkbox(c) for c in p['changes'])}</ul></div>" for p in people]
-    if groups:
-        blocks.append(f"<div class='item'><b>Groups</b><ul class='changes'>{''.join(_checkbox(g) for g in groups)}</ul></div>")
+    """Changes waiting first; unticked ones in a collapsed Ignored section at the bottom, in the same form
+    so ticking one there and saving brings it back."""
+    def blocks(skipped: bool) -> list[str]:
+        out = []
+        for name, changes in [(p["name"], p["changes"]) for p in people] + [("Groups", groups)]:
+            chosen = [c for c in changes if c["skipped"] == skipped]
+            if chosen:
+                out.append(f"<div class='item'><b>{esc(name)}</b><ul class='changes'>"
+                           f"{''.join(_checkbox(c) for c in chosen)}</ul></div>")
+        return out
+
+    waiting, ignored = blocks(False), blocks(True)
+    count = sum(c["skipped"] for p in people for c in p["changes"]) + sum(g["skipped"] for g in groups)
+    hidden = (f"<details class='ignored'><summary>Ignored ({count:,})</summary><p class='muted'>Tick a change "
+              f"and press Save choices to bring it back.</p>{''.join(ignored)}</details>" if ignored else "")
+    body = "".join(waiting) or "<p class='muted'>Nothing waiting.</p>"
     save = "<div class='row'><button>Save choices</button></div>"
-    return (f"<section class='card'><h2>Changes</h2><form method='post' action='review/changes'>"
-            f"{save}{''.join(blocks)}{save}</form></section>")
+    return (f"<section class='card'><h2>Changes</h2><form method='post' action='review/changes'>{save}"
+            f"{body}{hidden}{save}</form></section>")
 
 
 def _checkbox(change: dict) -> str:

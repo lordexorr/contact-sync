@@ -370,7 +370,9 @@ ul.changes{list-style:none;margin:6px 0 0;padding:0}
 ul.changes li{padding:3px 0}
 .option{display:flex;align-items:center;gap:8px;margin:6px 0}
 img.thumb{width:48px;height:48px;border-radius:50%;object-fit:cover;vertical-align:middle;margin-left:8px}
-details{margin:2px 0 0 26px}
+li details{margin:2px 0 0 26px}
+details.ignored{margin-top:16px}
+details.ignored>summary{cursor:pointer;font-weight:600}
 """
 
 
