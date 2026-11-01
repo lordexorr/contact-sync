@@ -23,9 +23,10 @@ Changing an Apple ID's main password revokes its app-specific passwords. If that
    4. Select the new project in the project picker. Every step below applies to whichever project is selected, so check that its name shows at the top before continuing.
 2. **APIs & Services → Library**: find **Google People API** and enable it.
 3. **OAuth consent screen** (it opens *Google Auth Platform*) → **Get started**: app name "Contact Sync", your email for support and contact, audience **External**.
-4. **Audience → Publish app**. Publishing status must read **In production**. In *Testing*, Google signs Contact Sync out every 7 days.
-5. **Clients → Create client**: application type **Desktop app**, name "Contact Sync".
-6. Copy the **Client ID** and **Client secret** before closing the dialog. Google shows the secret only once.
+4. **Branding**: Google won't publish the app until its app domain is filled in. Set **Application home page** and **Application privacy policy link** to pages you control (your copy of this repository works, for example its README), leave the terms of service link blank, and add that site's domain (for example `github.com`) under **Authorized domains**. Leave **App logo** empty: uploading one means Google has to review the app before anyone can sign in. Save.
+5. **Audience → Publish app**. Publishing status must read **In production**. In *Testing*, Google signs Contact Sync out every 7 days.
+6. **Clients → Create client**: application type **Desktop app**, name "Contact Sync".
+7. Copy the **Client ID** and **Client secret** before closing the dialog. Google shows the secret only once.
 
 ### 3. Configure the add-on
 
