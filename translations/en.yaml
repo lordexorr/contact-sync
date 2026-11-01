@@ -2,6 +2,11 @@ configuration:
   daily_check_time:
     name: Daily check time
     description: When the daily check runs, as HH:MM on a 24-hour clock in Home Assistant's time zone.
+  notify:
+    name: Daily notification
+    description: >-
+      A notify entity or service, such as notify.mobile_app_my_phone or an email notifier, told after the
+      daily check when changes are waiting or an account couldn't be read. Leave empty for none.
   google:
     name: Google
     description: >-

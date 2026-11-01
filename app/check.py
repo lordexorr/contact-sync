@@ -7,7 +7,7 @@ from pathlib import Path
 
 import requests
 
-from . import people, photos, storage, vcard
+from . import base, people, photos, storage, vcard
 from .google import GoogleContacts, GoogleError, revoke
 from .icloud import ICloudAddressBook, ICloudError
 from .settings import PRIVATE_DIR, SHARED_DIR
@@ -19,7 +19,7 @@ RECORDS_FILE = PRIVATE_DIR / "records.json"
 GOOGLE_ACCOUNTS_FILE = PRIVATE_DIR / "google_accounts.json"
 SNAPSHOT_DIR = SHARED_DIR / "snapshots"
 
-_check_lock = threading.Lock()  # one check at a time
+check_lock = threading.Lock()  # one check, or one apply, at a time
 # Guards the Google account list, the snapshots, status.json and records.json. It's only held for quick
 # file work, so connecting or disconnecting never waits for a check, and a check can still tell that an
 # account was disconnected while it was being read.
@@ -61,6 +61,7 @@ def remove_google_account(email: str) -> None:
             records["accounts"] = [a for a in records["accounts"] if a["key"] != key]
             records["contacts"] = [c for c in records["contacts"] if c["account"] != key]
             storage.write_json(RECORDS_FILE, records)
+        base.forget(key)
     for account in accounts:
         if account["email"] == email:
             revoke(account["refresh_token"])
@@ -74,30 +75,40 @@ class _Run:
         self.accounts: list[dict] = []
         self.contacts: list[dict] = []
         self.fingerprints = photos.Fingerprints()
+        # Each account's data as read, for applying changes. iCloud: {"book", "items", "photos": {href: ref}};
+        # Google: {"people", "groups", "photos": {resourceName: url}}.
+        self.raw: dict[str, dict] = {}
 
 
 def run_check(options: dict) -> None:
-    """Read every account, save a snapshot and the contacts of each, and record counts and errors."""
-    with _check_lock:
-        run = _Run()
-        results = [_check_icloud(a, run) for a in options["icloud_accounts"]]
-        results += [_check_google(a, options, run) for a in google_accounts()]
-        with _state_lock:
-            connected = {f"google:{a['email']}" for a in google_accounts()}
+    with check_lock:
+        read_accounts(options)
 
-            def kept(key: str) -> bool:  # an account disconnected while it was being read stays out
-                return not key.startswith("google:") or key in connected
 
-            checked_at = datetime.now(timezone.utc).isoformat()
-            results = [r for r in results if r["service"] != "Google" or kept(f"google:{r['login']}")]
-            storage.write_json(STATUS_FILE, {"checked_at": checked_at, "accounts": results})
-            storage.write_json(RECORDS_FILE, {
-                "checked_at": checked_at,
-                "accounts": [a for a in run.accounts if kept(a["key"])],
-                "contacts": [c for c in run.contacts if kept(c["account"])],
-            })
-            _remove_other_snapshots(run.saved)
-        run.fingerprints.save()
+def read_accounts(options: dict) -> _Run:
+    """Read every account, save a snapshot and the contacts of each, and record counts and errors.
+    The caller holds check_lock."""
+    run = _Run()
+    results = [_check_icloud(a, run) for a in options["icloud_accounts"]]
+    results += [_check_google(a, options, run) for a in google_accounts()]
+    with _state_lock:
+        connected = {f"google:{a['email']}" for a in google_accounts()}
+
+        def kept(key: str) -> bool:  # an account disconnected while it was being read stays out
+            return not key.startswith("google:") or key in connected
+
+        checked_at = datetime.now(timezone.utc).isoformat()
+        results = [r for r in results if r["service"] != "Google" or kept(f"google:{r['login']}")]
+        storage.write_json(STATUS_FILE, {"checked_at": checked_at, "accounts": results})
+        storage.write_json(RECORDS_FILE, {
+            "checked_at": checked_at,
+            "accounts": [a for a in run.accounts if kept(a["key"])],
+            "contacts": [c for c in run.contacts if kept(c["account"])],
+        })
+        _remove_other_snapshots(run.saved)
+        run.raw = {key: data for key, data in run.raw.items() if kept(key)}
+    run.fingerprints.save()
+    return run
 
 
 def _result(service: str, name: str, login: str) -> dict:
@@ -121,6 +132,7 @@ def _check_icloud(account: dict, run: _Run) -> dict:
             run.saved.add(_save_snapshot(f"icloud-{account['apple_id']}", items))
             run.accounts.append({"key": key, "name": row["name"], "groups": groups})
             run.contacts += [c.to_dict() for c in contacts]
+            run.raw[key] = {"book": book.book, "items": items, "photos": photo_refs}
         except Exception as err:  # one account failing must not cost the others their results
             row["error"] = _describe(err, "iCloud")
     _log(row)
@@ -137,11 +149,12 @@ def _check_google(account: dict, options: dict, run: _Run) -> dict:
             persons = api.fetch_contacts()
             groups = [g for g in api.fetch_groups() if g.get("groupType") == "USER_CONTACT_GROUP"]
             group_names = {g["resourceName"]: g["name"] for g in groups}
-            contacts = []
+            contacts, photo_urls = [], {}
             for person in persons:
                 c, photo_url = people.read(key, person, group_names)
                 if photo_url:
                     c.photo = run.fingerprints.get(("url", photo_url), api.fetch_photo)
+                    photo_urls[c.id] = photo_url
                 contacts.append(c)
         row["contacts"], row["groups"] = len(contacts), len(groups)
         with _state_lock:  # an account disconnected while it was being read isn't saved again
@@ -149,6 +162,7 @@ def _check_google(account: dict, options: dict, run: _Run) -> dict:
                 run.saved.add(_save_snapshot(f"google-{account['email']}", {"people": persons, "groups": groups}))
         run.accounts.append({"key": key, "name": account["email"], "groups": list(group_names.values())})
         run.contacts += [c.to_dict() for c in contacts]
+        run.raw[key] = {"people": persons, "groups": groups, "photos": photo_urls}
     except Exception as err:  # one account failing must not cost the others their results
         row["error"] = _describe(err, "Google")
     _log(row)

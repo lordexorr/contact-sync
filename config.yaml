@@ -1,5 +1,5 @@
 name: Contact Sync
-version: "0.2.9"
+version: "0.3.0"
 slug: contact_sync
 description: Keeps contacts in sync across iCloud and Google accounts. Checks daily and writes nothing until you apply the changes.
 arch:
@@ -9,17 +9,20 @@ ingress: true
 ingress_port: 8099
 panel_icon: mdi:contacts
 panel_title: Contact Sync
+homeassistant_api: true
 map:
   - type: addon_config
     read_only: false
 options:
   daily_check_time: "08:00"
+  notify: ""
   google:
     client_id: ""
     client_secret: ""
   icloud_accounts: []
 schema:
   daily_check_time: "match(^([01][0-9]|2[0-3]):[0-5][0-9]$)"
+  notify: str?
   google:
     client_id: str?
     client_secret: password?

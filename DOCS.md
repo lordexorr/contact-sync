@@ -1,8 +1,6 @@
 # Contact Sync
 
-Keeps contacts in sync across any number of iCloud and Google accounts, as one combined list. It checks once a day and whenever you press **Check now**, and writes nothing to any account until you apply the changes yourself.
-
-**Current build: review only.** It reads every account and shows what a sync would change. It never writes to any account.
+Keeps contacts in sync across any number of iCloud and Google accounts, as one combined list. It checks once a day and whenever you press **Check now**, and writes nothing to any account until you review the changes and apply them yourself. Every account is backed up before anything is written.
 
 ## Setup
 
@@ -32,6 +30,8 @@ Changing an Apple ID's main password revokes its app-specific passwords. If that
 
 On the **Configuration** tab, open the **Google** section and enter the client ID and secret. Under **iCloud accounts**, press **Add** for each iCloud account and enter a label of your choice (shown on the Contact Sync page), its Apple ID, and its app-specific password. Save, then restart the add-on. On the **Info** tab, turn on **Show in sidebar**.
 
+Optionally, set **Daily notification** to a notify entity or service, such as `notify.mobile_app_my_phone` or an email notifier. After each daily check it sends a message when changes are waiting or an account couldn't be read, and nothing otherwise.
+
 ### 4. Connect each Google account
 
 Use a computer for this. The copy-and-paste step is awkward on a phone.
@@ -54,16 +54,53 @@ After each check, the **Review** section at the top of the Contact Sync page cou
   - Untick a row to leave every account as it is for that row. It moves to a collapsed **Ignored** section at the bottom, where ticking it again brings it back.
   - In a list, such as two different work addresses, untick a value in **After sync** to leave it out of every account; it's removed from any account that has it.
   - Groups get a table of their own, with each account's member count. Google labels count as groups.
+- **Duplicates within one account:** listed for information. Applying updates one copy in each account and leaves the others as they are.
 - **Start over** forgets every match, choice and skip.
 
 Contacts are matched automatically when they share a phone number or email address and their names agree, or when they have the same full name in different accounts and nothing contradicts it. Being matched only means the copies are the same person: every difference between them still appears under **Changes**. Everything you choose is saved the moment you click it, and kept for later checks.
+
+## Applying changes
+
+Press **Apply changes…** at the top of the review to apply every ticked change, or **Apply just *name*…** under a person's table to apply only theirs, including their group changes. A page then shows how many contacts each account gains, has updated or deleted, and its group changes. Pressing **Apply now** does this:
+
+1. Checks every account again. If anything changed since that page opened, in an account or in the review, it stops without writing anything.
+2. Backs up every account (see below).
+3. Makes the changes, touching only the details shown in the review. Everything else on each contact stays as it is, including details only one service has. Photos are copied at full size.
+4. Checks again and records what every account now holds.
+
+The results page lists every change made and every one that wasn't, with the reason. A person with a failed change stays in the review, so applying again retries it.
+
+- People in an unanswered possible match are left out until you answer it, so a sync can't create a second copy of someone.
+- A value between accounts that you haven't picked uses the one marked in the review.
+
+### Deletions
+
+The record made after each apply is what lets later reviews tell a deletion from a detail that was never synced. When something an account held at the last apply is gone from it, the review proposes deleting it from the other accounts too, instead of copying it back:
+
+- A deleted contact shows as a **Contact** row that deletes it from every account. Untick it to leave every account as it is.
+- A deleted phone number, email, address, website or related name starts unticked in **After sync**, with a note saying where it was deleted. Tick it to keep it in every account instead.
+- A cleared name field, birthday, note or photo shows as removed from every account.
+- A group deleted from one account, or a person taken out of a group, is deleted from or taken out of the group in the other accounts.
+
+Until the first apply, nothing counts as deleted.
+
+### Backups
+
+Before writing, every account is saved to `addon_configs/local_contact_sync/backups`, in a folder named for the date and time. The last 10 backups are kept. Each account has:
+
+- a `.vcf` file, which iCloud.com, Google Contacts and the Contacts apps can import;
+- a `.json` file with everything as the service sent it;
+- under `photos`, the full-size photo of every contact the apply changed or deleted.
+
+Importing a `.vcf` file adds its contacts as new ones, next to any already there.
 
 ## Where things are kept
 
 | What | Where |
 |---|---|
 | Apple app-specific passwords, Google client ID and secret | The add-on's Configuration tab |
-| Google sign-ins, last check results | The add-on's private storage |
+| Google sign-ins, last check results, your review decisions, the record of the last apply | The add-on's private storage |
 | Raw contact snapshots from the latest check | `addon_configs/local_contact_sync/snapshots` on the Samba share |
+| Backups made before each apply | `addon_configs/local_contact_sync/backups` on the Samba share |
 
-The snapshots are kept under `addon_configs`, outside the add-on's own folder, so contact data can never end up in the add-on's code or on GitHub. Home Assistant gives every add-on a folder there for files you can open.
+The snapshots and backups are kept under `addon_configs`, outside the add-on's own folder, so contact data can never end up in the add-on's code or on GitHub. Home Assistant gives every add-on a folder there for files you can open.

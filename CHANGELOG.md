@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.0
+
+Apply. Contact Sync now writes the changes you review.
+
+- **Apply changes…** at the top of the review applies every ticked change; **Apply just *name*…** under a person's table applies only theirs, with their group changes. A page shows what changes in each account before you press **Apply now**.
+- Before writing, it checks every account again and stops without writing anything if something changed since that page opened. It then backs up every account to `addon_configs/local_contact_sync/backups`, as `.vcf` and `.json` files plus the full-size photos of the contacts it changes, and keeps the last 10 backups.
+- Only the details shown in the review are written. Everything else on each contact stays as it is, including details only one service has. Photos are copied at full size.
+- A results page lists every change made and every one that wasn't, with the reason. People with a failed change stay in the review to try again.
+- After each apply, a record of what every account holds lets later reviews carry deletions across: a contact, detail, photo, group or group membership deleted from one account is deleted from the others instead of being copied back. A deleted list value starts unticked; tick it to keep it everywhere.
+- Where accounts disagree on a value, the one changed since the last apply is preselected over one left as it was.
+- Contacts that were the same person at the last apply stay matched, even after a name or number changes in one account.
+- People in an unanswered possible match are left out of Apply until you answer it.
+- New **Daily notification** option: a notify entity or service told after the daily check when changes are waiting or an account couldn't be read. The add-on now has Home Assistant API access for this.
+
 ## 0.2.9
 
 - An account cell that would change now shows its new value below the old one, the way lists do: the old label, name, birthday or other value struck through, and the new one marked + in green. A replaced photo shows the new one, outlined in green, next to the faded old one.

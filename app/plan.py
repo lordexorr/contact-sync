@@ -1,4 +1,7 @@
-"""What a sync would change in each account, worked out from the latest check and your decisions."""
+"""What a sync would change in each account, worked out from the latest check, the last apply and your
+decisions: the review's comparison tables, and the edits applying them makes."""
+import hashlib
+import json
 from collections import Counter, defaultdict
 from datetime import datetime
 
@@ -8,6 +11,8 @@ from .model import Contact, Value, fold, label_text
 # Fields with one value per contact, and their names on the review page.
 SINGLE = {"name": "Name", "nickname": "Nickname", "company": "Company", "title": "Job title",
           "birthday": "Birthday", "note": "Notes"}
+# The single fields a sync can empty, when an account deleted the value since the last apply. Never the name.
+CLEARABLE = ("nickname", "company", "title", "birthday", "note")
 # Fields with any number of values, and what one value is called.
 MULTI = {"phones": "phone", "emails": "email", "addresses": "address", "urls": "website", "related": "related name"}
 MONTHS = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split()
@@ -20,66 +25,114 @@ LABEL_CHOICES = {
     "urls": ["homepage", "home", "work", "other"],
     "related": [],
 }
+_DELETED = {"text": "Deleted since the last sync", "state": "note"}
 
 
-def build(contacts: list[Contact], accounts: list[dict], decisions: dict) -> dict:
-    """Possible matches, values to choose between, and a comparison table per person.
+def build(contacts: list[Contact], accounts: list[dict], decisions: dict, base: dict | None = None) -> dict:
+    """Possible matches, values to choose between, a comparison table per person, and what applying does.
 
-    accounts holds {"key", "name", "groups"} for each account read in the latest check; contacts in
-    any other account are ignored, so an account that couldn't be read never looks empty.
-    decisions holds the user's "same"/"different" pairs, "picks" and "skips". A skipped row leaves every
-    account as it is; a skipped list value ("<person>|<field>=<value>") is left out of every account.
+    accounts holds {"key", "name", "groups"} for each account read in the latest check; contacts in any
+    other account are ignored, so an account that couldn't be read never looks empty. decisions holds the
+    user's "same"/"different" pairs, "picks", "skips" and "keeps": a skipped row leaves every account as it
+    is, a skipped list value ("<person>|<field>=<value>") is left out of every account, and a kept one stays
+    in every account even when an account deleted it. base is what the accounts held after the last apply
+    (see base.py).
+
+    review["sync"] holds the edits: for each person, the copies to delete, create and update, and the group
+    changes, one per account and group. Skipped rows make none.
     """
     names = {a["key"]: a["name"] for a in accounts}
     contacts = [c for c in contacts if c.account in names]
     by_ref = {c.ref: c for c in contacts}
-    picks, skips = decisions.get("picks", {}), set(decisions.get("skips", []))
-    clusters, suggestions = match.match(contacts, set(decisions.get("same", [])), set(decisions.get("different", [])))
+    picks, skips, keeps = decisions.get("picks", {}), set(decisions.get("skips", [])), set(decisions.get("keeps", []))
+    last = _Last(base or {}, set(by_ref))
+    clusters, suggestions = match.match(contacts, set(decisions.get("same", [])) | last.links(),
+                                        set(decisions.get("different", [])))
+    waiting = {r for pair, _ in suggestions for r in pair.split("||")}  # people a possible match holds back
+    have = {a["key"]: {fold(g) for g in a["groups"]} for a in accounts}
+    # Groups an account has deleted since the last apply, which other accounts still have.
+    dropped = {g for a in names for g in last.account_groups(a) - have[a] if any(g in have[b] for b in names)}
     spelling = {fold(g): g for a in accounts for g in a["groups"]} | {fold(g): g for c in contacts for g in c.groups}
-    members = Counter((c.account, fold(g)) for c in contacts for g in set(c.groups))
+    members = Counter((c.account, g) for c in contacts for g in {fold(x) for x in c.groups})
 
     review = {"columns": list(names.values()), "suggestions": [], "conflicts": [], "people": [], "groups": [],
-              "duplicates": []}
+              "duplicates": [], "clusters": clusters, "sync": {"names": names, "people": {}, "groups": []}}
     for pair, reason in suggestions:
         review["suggestions"].append({
             "id": pair, "reason": reason, "contacts": [_summary(by_ref[r], names) for r in pair.split("||")],
         })
-    to_group = defaultdict(list)  # (account, folded group name) -> contacts to add to it
-    totals = Counter()            # folded group name -> people in it after the sync
+    to_group, from_group = defaultdict(list), defaultdict(list)  # (account, folded group) -> members to add, remove
+    totals = Counter()  # folded group name -> people in it after the sync
     for refs in clusters:
-        group = [by_ref[r] for r in refs]
+        copies = [by_ref[r] for r in refs]
         key = refs[0]
-        merged, conflicts = _merge(key, group, picks, names)
+        merged, conflicts = _merge(key, copies, picks, names, last)
         review["conflicts"] += [{**c, "person": merged["display"], "decided": c["id"] in picks} for c in conflicts]
-        copies = Counter(c.account for c in group)
         review["duplicates"] += [{"person": merged["display"], "account": names[a], "count": n}
-                                 for a, n in copies.items() if n > 1]
-        first = {}
-        for c in group:
-            first.setdefault(c.account, c)
-        missing = [a for a in names if a not in first]
-        rows = [_contact_row(key, first, missing, merged, names, skips)] if missing else []
-        rows += _field_rows(key, first, merged, names, skips)
-        copied = bool(missing) and f"{key}|new" not in skips
-        for g in merged["groups"]:
-            totals[fold(g)] += 1
-            for account in names:
-                c = first.get(account)
-                if (c is not None or copied) and (c is None or fold(g) not in {fold(x) for x in c.groups}):
-                    to_group[(account, fold(g))].append(merged["display"])
-        if rows:
-            review["people"].append({"name": merged["display"], "rows": rows})
+                                 for a, n in Counter(c.account for c in copies).items() if n > 1]
+        person = _Person(key, copies, merged, names, skips, keeps, last)
+        person.compare()
+        person.ops["held"] = key in waiting
+        if not person.ops["delete"]:
+            person.memberships(have, dropped, to_group, from_group, totals)
+        review["sync"]["people"][key] = person.ops
+        if person.rows:
+            review["people"].append({"key": key, "name": merged["display"], "rows": person.rows,
+                                     "held": key in waiting})
     review["people"].sort(key=lambda p: fold(p["name"]))
-    review["groups"] = _group_rows(accounts, names, spelling, members, to_group, totals, skips)
+    review["groups"], review["sync"]["groups"] = _group_rows(
+        names, have, dropped, spelling, members, to_group, from_group, totals, skips, last)
 
-    waiting = [r for p in review["people"] for r in p["rows"] if not r["skipped"]]
-    waiting += [r for r in review["groups"] if not r["skipped"]]
+    rows = [r for p in review["people"] for r in p["rows"]] + review["groups"]
     review["counts"] = {
-        "changes": len(waiting),
+        "changes": sum(not r["skipped"] for r in rows),
         "suggestions": len(review["suggestions"]),
         "conflicts": sum(not c["decided"] for c in review["conflicts"]),
     }
     return review
+
+
+def scope(review: dict, person: str | None = None) -> dict:
+    """What applying does: everyone's edits, or one person's with the group changes that go with them.
+    People waiting on a possible match are left out until it's answered."""
+    sync = review["sync"]
+    keys = list(sync["people"]) if person is None else [person] if person in sync["people"] else []
+    allowed = {k for k in keys if not sync["people"][k]["held"]}
+    people = {k: sync["people"][k] for k in sorted(allowed) if _edits(sync["people"][k])}
+    groups = []
+    for op in sync["groups"]:
+        add = [m for m in op["add"] if m["person"] in allowed]
+        remove = [m for m in op["remove"] if m["person"] in allowed]
+        if person is not None:  # one person never creates a group just for others, or deletes one
+            op = {**op, "create": op["create"] and bool(add), "delete": False}
+        if op["create"] or op["delete"] or add or remove:
+            groups.append({**op, "add": add, "remove": remove})
+    return {"names": sync["names"], "people": people, "groups": groups}
+
+
+def is_empty(work: dict) -> bool:
+    return not work["people"] and not work["groups"]
+
+
+def digest(work: dict) -> str:
+    """A fingerprint of what applying does, to tell whether anything changed between two checks."""
+    return hashlib.sha256(json.dumps(work, sort_keys=True).encode()).hexdigest()
+
+
+def held_back(review: dict) -> int:
+    """How many people with changes are waiting on a possible match."""
+    return sum(p["held"] and _edits(p) for p in review["sync"]["people"].values())
+
+
+def contact_changes(c: Contact) -> dict:
+    """An edit that fills an empty contact with everything c holds except its photo."""
+    changes = _blank()
+    parts = [c.prefix, c.given, c.middle, c.family, c.suffix]
+    if any(parts):
+        changes["set"]["name"] = parts
+    changes["set"] |= {f: getattr(c, f) for f in CLEARABLE if getattr(c, f)}
+    changes["add"] = [_value_op(f, v) for f in MULTI for v in getattr(c, f)]
+    return changes
 
 
 def show(field: str, value: str) -> str:
@@ -98,12 +151,88 @@ def show(field: str, value: str) -> str:
     return value
 
 
+def _edits(person_ops: dict) -> bool:
+    return bool(person_ops["update"] or person_ops["create"] or person_ops["delete"])
+
+
+def _blank() -> dict:
+    """An edit to one contact: fields to set ("" empties one), the photo ({"from": ref} or "clear"), and list
+    values to add, remove and relabel."""
+    return {"set": {}, "photo": None, "add": [], "remove": [], "relabel": []}
+
+
+def _value_op(field: str, v: Value) -> dict:
+    return {"field": field, "key": v.key or fold(v.value), "value": v.value, "label": v.label, "parts": list(v.parts)}
+
+
+# --- What every account held after the last apply ---
+
+class _Last:
+    """What each account held after the last apply. A value an account has deleted since then is removed
+    from the other accounts; a value that was never synced is copied to them."""
+
+    def __init__(self, base: dict, refs_now: set[str]):
+        self._contacts = base.get("contacts", {})
+        self._groups = {a: set(g) for a, g in base.get("groups", {}).items()}
+        self._clusters = base.get("clusters", [])
+        self._cluster_of = {r: cluster for cluster in self._clusters for r in cluster}
+        self._now = refs_now
+
+    def links(self) -> set[str]:
+        """Pairs of contacts that were one person at the last apply, so changing a name or number in one
+        account doesn't split them up."""
+        pairs = set()
+        for cluster in self._clusters:
+            present = sorted(r for r in cluster if r in self._now)
+            pairs |= {f"{a}||{b}" for a, b in zip(present, present[1:])}
+        return pairs
+
+    def deleted_from(self, refs: list[str], missing: list[str]) -> list[str]:
+        """The accounts in missing that had this person at the last apply and have since deleted them."""
+        before = {r for ref in refs for r in self._cluster_of.get(ref, ())}
+        gone = {r.split("|", 1)[0] for r in before if r not in self._now}
+        return [a for a in missing if a in gone]
+
+    def changed(self, c: Contact, field: str, key: str) -> bool:
+        """Whether c's value, compared as key, differs from what c held at the last apply."""
+        entry = self._contacts.get(c.ref)
+        return entry is not None and _compare_key(field, entry["fields"].get(field, "")) != key
+
+    def had(self, c: Contact, field: str, key: str) -> bool:
+        """Whether c held this value at the last apply."""
+        old = self._contacts.get(c.ref, {}).get("fields", {}).get(field, "")
+        return bool(old) and _compare_key(field, old) == key
+
+    def photo_changed(self, c: Contact, fp: str) -> bool:
+        entry = self._contacts.get(c.ref)
+        if entry is None or entry["photo"] == "?":
+            return False
+        return not entry["photo"] or not photos.same(entry["photo"], fp)
+
+    def had_photo(self, c: Contact, fp: str) -> bool:
+        old = self._contacts.get(c.ref, {}).get("photo", "")
+        return old not in ("", "?") and photos.same(old, fp)
+
+    def lists(self, c: Contact, field: str) -> dict[str, str]:
+        """c's values in field at the last apply, as {key: label}."""
+        return self._contacts.get(c.ref, {}).get("lists", {}).get(field, {})
+
+    def groups(self, c: Contact) -> set[str]:
+        return set(self._contacts.get(c.ref, {}).get("groups", []))
+
+    def account_groups(self, account: str) -> set[str]:
+        return self._groups.get(account, set())
+
+
 # --- Working out the person every account should have ---
 
-def _merge(key: str, members: list[Contact], picks: dict, names: dict) -> tuple[dict, list[dict]]:
-    """The person as all accounts should have them, and the fields whose values disagree."""
-    newest = max(members, key=lambda c: c.updated or "")
-    merged, conflicts = {}, []
+def _merge(key: str, members: list[Contact], picks: dict, names: dict, last: _Last) -> tuple[dict, list[dict]]:
+    """The person as all accounts should have them, and the fields whose values disagree.
+
+    merged["cleared"] maps each field (and "photo") that an account deleted since the last apply, while the
+    others kept it unchanged, to the accounts that deleted it. Those fields are emptied everywhere.
+    """
+    merged, conflicts, cleared = {}, [], {}
     for field, title in SINGLE.items():
         options = {}
         for c in members:
@@ -113,17 +242,27 @@ def _merge(key: str, members: list[Contact], picks: dict, names: dict) -> tuple[
                 option["contacts"].append(c)
                 if field == "birthday" and value[0].isdigit():
                     option["value"] = value  # the version with the year wins
-        chosen = _choose(f"{key}|{field}", options, newest, picks)
+        changed = {k for k, o in options.items() if any(last.changed(c, field, k) for c in o["contacts"])}
+        chosen = _choose(f"{key}|{field}", options, picks, changed)
         if len(options) > 1:
             conflicts.append(_conflict(f"{key}|{field}", title, options, chosen, names,
                                        lambda o: {"value": show(field, o["value"])}))
         merged[field] = options[chosen]["value"] if chosen else ""
+        if field == "name":
+            source = _newest(options[chosen]["contacts"]) if chosen else None
+            merged["name_parts"] = ([source.prefix, source.given, source.middle, source.family, source.suffix]
+                                    if source else [""] * 5)
+        elif chosen and len(options) == 1 and chosen not in changed:
+            emptied = [c.account for c in members if not getattr(c, field) and last.had(c, field, chosen)]
+            if emptied:
+                cleared[field], merged[field] = emptied, ""
     for field in MULTI:
-        merged[field] = _union(members, field)
+        merged[field] = _union(members, field, last)
         for v in merged[field]:  # a label picked on the review page wins
             v.label = picks.get(f"{key}|{field}~{v.key}", v.label)
     merged["groups"] = sorted({fold(g): g for c in members for g in c.groups}.values(), key=fold)
-    merged["photo"] = _merge_photo(key, members, newest, picks, names, conflicts)
+    merged["photo"], merged["photo_from"] = _merge_photo(key, members, picks, names, conflicts, last, cleared)
+    merged["cleared"] = cleared
     merged["display"] = (merged["name"] or merged["company"]
                          or next((v.value for v in merged["emails"] + merged["phones"]), "") or "(no name)")
     return merged, conflicts
@@ -134,13 +273,19 @@ def _compare_key(field: str, value: str) -> str:
     return value[-5:] if field == "birthday" else fold(value)
 
 
-def _choose(conflict_id: str, options: dict, newest: Contact, picks: dict) -> str | None:
-    """The user's pick if they made one, otherwise the value from the most recently changed contact."""
+def _newest(contacts: list[Contact]) -> Contact:
+    return max(contacts, key=lambda c: c.updated or "")
+
+
+def _choose(conflict_id: str, options: dict, picks: dict, changed: set) -> str | None:
+    """The user's pick if they made one. Otherwise, of the values changed since the last apply (or of all of
+    them when none was), the one from the most recently changed contact."""
     if not options:
         return None
     if picks.get(conflict_id) in options:
         return picks[conflict_id]
-    return next((k for k, o in options.items() if any(c is newest for c in o["contacts"])), next(iter(options)))
+    pool = [k for k in options if k in changed] or list(options)
+    return max(pool, key=lambda k: _newest(options[k]["contacts"]).updated or "")
 
 
 def _conflict(conflict_id: str, title: str, options: dict, chosen: str, names: dict, describe) -> dict:
@@ -150,10 +295,12 @@ def _conflict(conflict_id: str, title: str, options: dict, chosen: str, names: d
     ]}
 
 
-def _union(members: list[Contact], field: str) -> list[Value]:
-    """Every value any account has. Each takes the label most accounts give it; an odd label becomes "other"."""
-    merged, labels = {}, defaultdict(list)
+def _union(members: list[Contact], field: str, last: _Last) -> list[Value]:
+    """Every value any account has. Each takes the label most accounts give it, preferring labels changed
+    since the last apply; an odd label becomes "other"."""
+    merged, labels, changed = {}, defaultdict(list), defaultdict(list)
     for c in members:
+        now = {}  # like the record of the last apply: one label per value, the last one when a value repeats
         for v in getattr(c, field):
             key = v.key or fold(v.value)
             if not key:
@@ -162,26 +309,41 @@ def _union(members: list[Contact], field: str) -> list[Value]:
             m.odd = m.odd or v.odd
             if v.label:
                 labels[key].append(v.label)
+                now[key] = v.label
+        before = last.lists(c, field)
+        changed_here = {k: l for k, l in now.items() if k in before and before[k].lower() != l.lower()}
+        for key, value_label in changed_here.items():
+            changed[key].append(value_label)
     for key, m in merged.items():
-        if labels[key]:
-            top = Counter(l.lower() for l in labels[key]).most_common(1)[0][0]
-            m.label = next(l for l in labels[key] if l.lower() == top)
+        pool = changed[key] or labels[key]
+        if pool:
+            top = Counter(l.lower() for l in pool).most_common(1)[0][0]
+            m.label = next(l for l in pool if l.lower() == top)
         elif m.odd:
             m.label = "other"
     return list(merged.values())
 
 
-def _merge_photo(key, members, newest, picks, names, conflicts) -> str:
+def _merge_photo(key, members, picks, names, conflicts, last, cleared) -> tuple[str, str]:
+    """The photo every account should have, as its fingerprint and the ref of a contact that has it."""
     options = {}
     for c in members:
         if c.photo in ("", "?"):
             continue
         fp = next((k for k in options if photos.same(k, c.photo)), c.photo)
         options.setdefault(fp, {"value": fp, "contacts": []})["contacts"].append(c)
-    chosen = _choose(f"{key}|photo", options, newest, picks)
+    changed = {k for k, o in options.items() if any(last.photo_changed(c, k) for c in o["contacts"])}
+    chosen = _choose(f"{key}|photo", options, picks, changed)
     if len(options) > 1:
         conflicts.append(_conflict(f"{key}|photo", "Photo", options, chosen, names, lambda o: {"thumb": o["value"]}))
-    return chosen or ""
+    if not chosen:
+        return "", ""
+    if len(options) == 1 and chosen not in changed:
+        emptied = [c.account for c in members if c.photo == "" and last.had_photo(c, chosen)]
+        if emptied:
+            cleared["photo"] = emptied
+            return "", ""
+    return chosen, _newest(options[chosen]["contacts"]).ref
 
 
 # --- Comparison rows ---
@@ -198,107 +360,249 @@ def _now(old: str, new: str, changing: bool) -> list[dict]:
     struck through ("old") and the new one marked + ("new"), the same way lists show it."""
     if not changing:
         return [{"text": old or "—"}]
-    return ([{"text": old, "state": "old"}] if old else []) + [{"text": new, "state": "new"}]
+    return ([{"text": old, "state": "old"}] if old else []) + ([{"text": new, "state": "new"}] if new else [])
 
 
-def _contact_row(key: str, first: dict, missing: list[str], merged: dict, names: dict, skips: set) -> dict:
-    cells = ({names[a]: [{"text": "Has this contact"}] for a in first}
-             | {names[a]: [{"text": "Not in this account", "state": "add"}] for a in missing})
-    after = {"kind": "text", "value": "In every account", "details": _details(merged)}
-    return _row(f"{key}|new", "Contact", cells, missing, names, after, skips)
+class _Person:
+    """One person's comparison rows, and the edits applying them makes to each account's copy. Where an
+    account has the person twice, the first copy is the one compared and updated."""
 
+    def __init__(self, key: str, copies: list[Contact], merged: dict, names: dict, skips: set, keeps: set,
+                 last: _Last):
+        self.key, self.merged, self.names = key, merged, names
+        self.skips, self.keeps, self.last = skips, keeps, last
+        self.first: dict[str, Contact] = {}
+        for c in copies:
+            self.first.setdefault(c.account, c)
+        self.missing = [a for a in names if a not in self.first]
+        # Each account's list values by key, field by field.
+        self.values = {a: {f: {(v.key or fold(v.value)): v for v in getattr(c, f)} for f in MULTI}
+                       for a, c in self.first.items()}
+        self.rows: list[dict] = []
+        self.edits: dict[str, dict] = defaultdict(_blank)
+        self.ops = {"name": merged["display"], "refs": [c.ref for c in copies], "held": False,
+                    "update": {}, "create": None, "delete": []}
 
-def _field_rows(key: str, first: dict, merged: dict, names: dict, skips: set) -> list[dict]:
-    """Rows for every detail the accounts that have this person don't agree on."""
-    rows = []
-    for field, title in SINGLE.items():
-        new = merged[field]
-        if not new:
-            continue
-        have = {a: c.name() if field == "name" else getattr(c, field) for a, c in first.items()}
-        changing = [a for a, old in have.items() if (old != new if field == "birthday" else fold(old) != fold(new))]
-        if changing:
-            cells = {names[a]: _now(show(field, old), show(field, new), a in changing) for a, old in have.items()}
-            rows.append(_row(f"{key}|field:{field}", title, cells, changing, names,
-                             {"kind": "text", "value": show(field, new)}, skips))
-    photo = merged["photo"]
-    if photo:
-        changing = [a for a, c in first.items() if c.photo != "?" and not (c.photo and photos.same(c.photo, photo))]
-        if changing:
-            cells = {}
-            for a, c in first.items():
+    def compare(self) -> None:
+        """Fill in the rows, and the edits for the rows left ticked."""
+        gone = self.last.deleted_from(self.ops["refs"], self.missing)
+        if gone:
+            if not self._delete_row(gone)["skipped"]:
+                self.ops["delete"] = list(self.ops["refs"])
+                return  # nothing else about a person matters once they're being deleted
+        elif self.missing and not self._contact_row()["skipped"]:
+            self.ops["create"] = {"accounts": self.missing, "contact": self._new_contact()}
+        self._single_rows()
+        self._photo_row()
+        for field, noun in MULTI.items():
+            self._list_rows(field, noun)
+        self.ops["update"] = {a: {"ref": self.first[a].ref, **e} for a, e in self.edits.items()
+                              if e["set"] or e["photo"] or e["add"] or e["remove"] or e["relabel"]}
+
+    def memberships(self, have: dict, dropped: set, to_group, from_group, totals) -> None:
+        """Note the groups the person joins in each account, and the ones they leave everywhere because an
+        account took them out since the last apply."""
+        mine = {a: {fold(g) for g in c.groups} for a, c in self.first.items()}
+        left = {g for a, c in self.first.items() for g in self.last.groups(c) - mine[a] if g in have[a]}
+        for g in {fold(g) for g in self.merged["groups"]} - dropped:
+            if g in left:
+                for a in self.first:
+                    if g in mine[a]:
+                        from_group[(a, g)].append(self._member(a))
+                continue
+            totals[g] += 1
+            for a in self.names:
+                if (a in self.first and g not in mine[a]) or (a not in self.first and self.ops["create"]):
+                    to_group[(a, g)].append(self._member(a))
+
+    def _member(self, account: str) -> dict:
+        """The person's copy in account; ref "" stands for the copy applying creates there."""
+        c = self.first.get(account)
+        return {"person": self.key, "ref": c.ref if c else "", "name": self.merged["display"]}
+
+    def _row(self, row_id: str, title: str, cells: dict, changing: list[str], after: dict) -> dict:
+        row = _row(row_id, title, cells, changing, self.names, after, self.skips)
+        self.rows.append(row)
+        return row
+
+    def _contact_row(self) -> dict:
+        cells = ({self.names[a]: [{"text": "Has this contact"}] for a in self.first}
+                 | {self.names[a]: [{"text": "Not in this account", "state": "add"}] for a in self.missing})
+        after = {"kind": "text", "value": "In every account", "details": _details(self.merged)}
+        return self._row(f"{self.key}|new", "Contact", cells, self.missing, after)
+
+    def _delete_row(self, gone: list[str]) -> dict:
+        # The same id as the row that copies the person, so a skip carries over either way.
+        cells = {}
+        for a, name in self.names.items():
+            if a in self.first:
+                cells[name] = [{"text": "Has this contact", "state": "old"}]
+            else:
+                cells[name] = [_DELETED] if a in gone else [{"text": "Not in this account"}]
+        return self._row(f"{self.key}|new", "Contact", cells, list(self.first),
+                         {"kind": "text", "value": "Deleted from every account"})
+
+    def _new_contact(self) -> dict:
+        """The edit that fills a new, empty contact with the person."""
+        m = self.merged
+        changes = _blank()
+        if any(m["name_parts"]):
+            changes["set"]["name"] = m["name_parts"]
+        changes["set"] |= {f: m[f] for f in CLEARABLE if m[f]}
+        changes["add"] = [_value_op(f, v) for f in MULTI for v in m[f] if self._kept(f, v)]
+        if m["photo"]:
+            changes["photo"] = {"from": m["photo_from"]}
+        return changes
+
+    def _single_rows(self) -> None:
+        cleared = self.merged["cleared"]
+        for field, title in SINGLE.items():
+            new = self.merged[field]
+            have = {a: c.name() if field == "name" else getattr(c, field) for a, c in self.first.items()}
+            if field in cleared:
+                changing = [a for a, old in have.items() if old]
+                cells = {self.names[a]: _now(show(field, old), "", True) if old
+                         else [_DELETED] if a in cleared[field] else [{"text": "—"}] for a, old in have.items()}
+                after, value = {"kind": "text", "value": "Removed from every account"}, ""
+            elif new:
+                changing = [a for a, old in have.items()
+                            if (old != new if field == "birthday" else fold(old) != fold(new))]
+                cells = {self.names[a]: _now(show(field, old), show(field, new), a in changing)
+                         for a, old in have.items()}
+                after = {"kind": "text", "value": show(field, new)}
+                value = self.merged["name_parts"] if field == "name" else new
+            else:
+                continue
+            if changing and not self._row(f"{self.key}|field:{field}", title, cells, changing, after)["skipped"]:
+                for a in changing:
+                    self.edits[a]["set"][field] = value
+
+    def _photo_row(self) -> None:
+        photo = self.merged["photo"]
+        cells = {}
+        if "photo" in self.merged["cleared"]:
+            changing = [a for a, c in self.first.items() if c.photo not in ("", "?")]
+            for a, c in self.first.items():
+                if a in changing:
+                    cells[self.names[a]] = [{"thumb": c.photo, "state": "old"}]
+                else:
+                    cells[self.names[a]] = [_DELETED] if a in self.merged["cleared"]["photo"] else [{"text": "—"}]
+            after, edit = {"kind": "text", "value": "Removed from every account"}, "clear"
+        elif photo:
+            changing = [a for a, c in self.first.items() if c.photo != "?" and not (c.photo and photos.same(c.photo, photo))]
+            for a, c in self.first.items():
                 had = c.photo not in ("", "?")
                 if a in changing:
-                    cells[names[a]] = ([{"thumb": c.photo, "state": "old"}] if had else []) + [{"thumb": photo, "state": "new"}]
+                    cells[self.names[a]] = ([{"thumb": c.photo, "state": "old"}] if had else []) + [{"thumb": photo, "state": "new"}]
                 else:
-                    cells[names[a]] = [{"thumb": c.photo}] if had else [{"text": "—"}]
-            rows.append(_row(f"{key}|field:photo", "Photo", cells, changing, names,
-                             {"kind": "photo", "thumb": photo}, skips))
-    for field, noun in MULTI.items():
-        rows += _list_rows(key, field, noun, first, merged, names, skips)
-    return rows
+                    cells[self.names[a]] = [{"thumb": c.photo}] if had else [{"text": "—"}]
+            after, edit = {"kind": "photo", "thumb": photo}, {"from": self.merged["photo_from"]}
+        else:
+            return
+        if changing and not self._row(f"{self.key}|field:photo", "Photo", cells, changing, after)["skipped"]:
+            for a in changing:
+                self.edits[a]["photo"] = edit
+
+    def _list_rows(self, field: str, noun: str) -> None:
+        """For one kind of list (phones, emails…): a row for each value whose label differs between accounts,
+        then one row per label listing every value under it, wherever some account's list would change."""
+        held = {a: v[field] for a, v in self.values.items()}
+        for v in self.merged[field]:
+            holders = {a: h[v.key] for a, h in held.items() if v.key in h}
+            changing = [a for a, m in holders.items() if v.label and m.label.lower() != v.label.lower()]
+            if changing:
+                row_id = f"{self.key}|{field}~{v.key}"  # also the id of the label picked in the dropdown
+                seen = {m.label for m in holders.values() if m.label}
+                options = list(dict.fromkeys(LABEL_CHOICES[field] + sorted(seen, key=str.lower) + [v.label]))
+                cells = {self.names[a]: _now("PREF" if m.odd else label_text(m.label), label_text(v.label), a in changing)
+                         for a, m in holders.items()}
+                after = {"kind": "label", "id": row_id, "options": [(o, label_text(o)) for o in options],
+                         "chosen": v.label}
+                row = self._row(row_id, f"Label of {v.value}", cells, changing, after)
+                if not row["skipped"] and self._kept(field, v):
+                    for a in changing:
+                        self.edits[a]["relabel"].append({"field": field, "key": v.key, "label": v.label})
+        by_label = defaultdict(list)
+        for v in self.merged[field]:
+            by_label[v.label.lower()].append(v)
+        for values in by_label.values():
+            keys = {v.key for v in values}
+            kept = {v.key for v in values if self._kept(field, v)}
+            changing = [a for a, h in held.items() if set(h) & keys != kept]
+            if not changing:
+                continue
+            label = values[0].label
+            title = f"{label_text(label)} {noun}" if label else f"{noun} (no label)"
+            cells = {}
+            for a, h in held.items():
+                # What the account has, with values being left out marked "old", then values it would gain as "new".
+                now = [{"text": h[v.key].value, "state": "" if v.key in kept else "old"} for v in values if v.key in h]
+                now += [{"text": v.value, "state": "new"} for v in values if v.key in kept and v.key not in h]
+                cells[self.names[a]] = now or [{"text": "—"}]
+            items = [{"id": f"{self.key}|{field}={v.key}", "text": v.value, "kept": v.key in kept,
+                      "note": self._deleted_note(field, v.key)} for v in values]
+            row = self._row(f"{self.key}|{field}:{label.lower()}", title[0].upper() + title[1:], cells, changing,
+                            {"kind": "values", "items": items})
+            if row["skipped"]:
+                continue
+            for a in changing:
+                for v in values:
+                    if v.key in kept and v.key not in held[a]:
+                        self.edits[a]["add"].append(_value_op(field, v))
+                    elif v.key not in kept and v.key in held[a]:
+                        self.edits[a]["remove"].append({"field": field, "key": v.key, "value": held[a][v.key].value})
+
+    def _kept(self, field: str, v: Value) -> bool:
+        """Whether every account ends up with this value: unless it's unticked, or an account deleted it since
+        the last apply and it wasn't ticked again."""
+        value_id = f"{self.key}|{field}={v.key}"
+        return value_id in self.keeps or (value_id not in self.skips and not self._deleted_by(field, v.key))
+
+    def _deleted_by(self, field: str, key: str) -> list[str]:
+        return [a for a, c in self.first.items() if key not in self.values[a][field] and key in self.last.lists(c, field)]
+
+    def _deleted_note(self, field: str, key: str) -> str:
+        by = self._deleted_by(field, key)
+        return f"Deleted from {', '.join(self.names[a] for a in by)} since the last sync" if by else ""
 
 
-def _list_rows(key: str, field: str, noun: str, first: dict, merged: dict, names: dict, skips: set) -> list[dict]:
-    """For one kind of list (phones, emails…): a row for each value whose label differs between accounts,
-    then one row per label listing every value under it, wherever some account's list would change."""
-    rows = []
-    held = {a: {(v.key or fold(v.value)): v for v in getattr(c, field)} for a, c in first.items()}
-    for v in merged[field]:
-        holders = {a: h[v.key] for a, h in held.items() if v.key in h}
-        changing = [a for a, m in holders.items() if v.label and m.label.lower() != v.label.lower()]
-        if changing:
-            row_id = f"{key}|{field}~{v.key}"  # also the id of the label picked in the dropdown
-            seen = {m.label for m in holders.values() if m.label}
-            options = list(dict.fromkeys(LABEL_CHOICES[field] + sorted(seen, key=str.lower) + [v.label]))
-            cells = {names[a]: _now("PREF" if m.odd else label_text(m.label), label_text(v.label), a in changing)
-                     for a, m in holders.items()}
-            after = {"kind": "label", "id": row_id, "options": [(o, label_text(o)) for o in options], "chosen": v.label}
-            rows.append(_row(row_id, f"Label of {v.value}", cells, changing, names, after, skips))
-    by_label = defaultdict(list)
-    for v in merged[field]:
-        by_label[v.label.lower()].append(v)
-    for values in by_label.values():
-        keys = {v.key for v in values}
-        kept = {v.key for v in values if f"{key}|{field}={v.key}" not in skips}
-        changing = [a for a, h in held.items() if set(h) & keys != kept]
-        if not changing:
-            continue
-        label = values[0].label
-        title = f"{label_text(label)} {noun}" if label else f"{noun} (no label)"
+def _group_rows(names, have, dropped, spelling, members, to_group, from_group, totals, skips, last):
+    """One row per group that some account lacks, has deleted, or would gain or lose people in, and the
+    changes each makes, one per account. Google labels count as groups."""
+    rows, ops = [], []
+    for g in sorted(set().union(*have.values()) | set(totals)):
+        title = spelling.get(g, g)
         cells = {}
-        for a, h in held.items():
-            # What the account has, with values being left out marked "old", then values it would gain as "new".
-            now = [{"text": h[v.key].value, "state": "" if v.key in kept else "old"} for v in values if v.key in h]
-            now += [{"text": v.value, "state": "new"} for v in values if v.key in kept and v.key not in h]
-            cells[names[a]] = now or [{"text": "—"}]
-        items = [{"id": f"{key}|{field}={v.key}", "text": v.value, "kept": v.key in kept} for v in values]
-        rows.append(_row(f"{key}|{field}:{label.lower()}", title[0].upper() + title[1:], cells, changing, names,
-                         {"kind": "values", "items": items}, skips))
-    return rows
-
-
-def _group_rows(accounts, names, spelling, members, to_group, totals, skips) -> list[dict]:
-    """One row per group that some account lacks, or lacks people in. Google labels count as groups."""
-    have = {a["key"]: {fold(g) for g in a["groups"]} for a in accounts}
-    rows = []
-    for g in sorted({fold(g) for a in accounts for g in a["groups"]} | set(totals)):
-        changing = [a for a in names if g not in have[a] or to_group.get((a, g))]
-        if not changing:
-            continue
-        cells = {}
-        for a in names:
-            adds = len(to_group.get((a, g), []))
-            if g not in have[a]:
-                cells[names[a]] = [{"text": "Not in this account", "state": "add"}]
-            else:
-                cells[names[a]] = ([{"text": _count(members[(a, g)], "member")}]
-                                   + ([{"text": f"{adds:,} more", "state": "new"}] if adds else []))
-        details = "; ".join(f"Adds to {names[a]}: {', '.join(sorted(to_group[(a, g)], key=fold))}"
-                            for a in names if to_group.get((a, g)))
-        after = {"kind": "text", "value": f"In every account, {_count(totals[g], 'member')}", "details": details}
-        rows.append(_row(f"group|{g}", spelling.get(g, g), cells, changing, names, after, skips))
-    return rows
+        if g in dropped:
+            changing = [a for a in names if g in have[a]]
+            for a, name in names.items():
+                if g in have[a]:
+                    cells[name] = [{"text": _count(members[(a, g)], "member"), "state": "old"}]
+                else:
+                    cells[name] = [_DELETED] if g in last.account_groups(a) else [{"text": "Not in this account"}]
+            after = {"kind": "text", "value": "Deleted from every account"}
+        else:
+            changing = [a for a in names if g not in have[a] or to_group.get((a, g)) or from_group.get((a, g))]
+            if not changing:
+                continue
+            for a, name in names.items():
+                adds, removes = len(to_group.get((a, g), [])), len(from_group.get((a, g), []))
+                if g not in have[a]:
+                    cells[name] = [{"text": "Not in this account", "state": "add"}]
+                else:
+                    cells[name] = ([{"text": _count(members[(a, g)], "member")}]
+                                   + ([{"text": f"{adds:,} more", "state": "new"}] if adds else [])
+                                   + ([{"text": f"{removes:,} fewer", "state": "gone"}] if removes else []))
+            details = "; ".join(
+                [f"Adds to {names[a]}: {_names(to_group[(a, g)])}" for a in names if to_group.get((a, g))]
+                + [f"Removes from {names[a]}: {_names(from_group[(a, g)])}" for a in names if from_group.get((a, g))])
+            after = {"kind": "text", "value": f"In every account, {_count(totals[g], 'member')}", "details": details}
+        row = _row(f"group|{g}", title, cells, changing, names, after, skips)
+        rows.append(row)
+        if not row["skipped"]:
+            ops += [{"account": a, "group": title, "fold": g, "create": g not in have[a], "delete": g in dropped,
+                     "add": to_group.get((a, g), []), "remove": from_group.get((a, g), [])} for a in changing]
+    return rows, ops
 
 
 # --- Descriptions ---
@@ -334,6 +638,10 @@ def _when(stamp: str) -> str:
     except ValueError:
         return ""
     return f"Last changed {MONTHS[changed.month - 1]} {changed.day}, {changed.year}"
+
+
+def _names(members: list[dict]) -> str:
+    return ", ".join(sorted({m["name"] for m in members}, key=fold))
 
 
 def _count(n: int, word: str) -> str:

@@ -1,4 +1,4 @@
-"""Read access to an iCloud address book over CardDAV."""
+"""An iCloud address book over CardDAV."""
 import xml.etree.ElementTree as ET
 from urllib.parse import urljoin, urlparse
 
@@ -21,10 +21,11 @@ class ICloudError(Exception):
 class ICloudAddressBook:
     """One iCloud account's address book. Use it in a with block so its connection is closed."""
 
-    def __init__(self, apple_id: str, app_password: str):
+    def __init__(self, apple_id: str, app_password: str, book: str = ""):
         self.session = requests.Session()
         self.session.auth = (apple_id, app_password)
-        self.session.headers["User-Agent"] = "ContactSync/0.1"
+        self.session.headers["User-Agent"] = "ContactSync/0.3"
+        self.book = book  # the address book's address, found by fetch_all
 
     def __enter__(self):
         return self
@@ -38,9 +39,21 @@ class ICloudAddressBook:
         resp.raise_for_status()
         return resp.content
 
+    def put(self, href: str, vcard: str, etag: str = "") -> None:
+        """Save a contact or group: over the version with etag, or as a new item when etag is ""."""
+        headers = {"Content-Type": "text/vcard; charset=utf-8"}
+        headers["If-Match" if etag else "If-None-Match"] = etag or "*"
+        resp = self.session.put(urljoin(self.book, href), data=vcard.encode(), headers=headers, timeout=60)
+        _check_write(resp)
+
+    def delete(self, href: str, etag: str) -> None:
+        resp = self.session.delete(urljoin(self.book, href), headers={"If-Match": etag} if etag else {}, timeout=60)
+        if resp.status_code != 404:  # already gone
+            _check_write(resp)
+
     def fetch_all(self) -> list[dict]:
         """Every item in the address book, contacts and groups alike, as {href, etag, vcard}."""
-        book = self._find_address_book()
+        self.book = book = self._find_address_book()
         listing = self._dav("PROPFIND", book, _propfind(f"{{{DAV}}}getetag"), depth=1)
         hrefs = [r.findtext("d:href", "", NS).strip() for r in listing.findall("d:response", NS)]
         hrefs = [h for h in hrefs if not _same_path(urljoin(book, h), book)]  # skip the collection itself
@@ -95,6 +108,16 @@ class ICloudAddressBook:
         if resp.status_code != 207:
             raise ICloudError(f"iCloud answered {method} {urlparse(url).path} with HTTP {resp.status_code}.")
         return ET.fromstring(resp.content)
+
+
+def _check_write(resp: requests.Response) -> None:
+    if resp.status_code in (200, 201, 204):
+        return
+    if resp.status_code == 412:
+        raise ICloudError("It changed in iCloud after the check, so it was left as it is.")
+    if resp.status_code == 401:
+        raise ICloudError("Apple rejected the Apple ID or app-specific password.")
+    raise ICloudError(f"iCloud refused the change (HTTP {resp.status_code}).")
 
 
 def _xml(root: ET.Element) -> bytes:

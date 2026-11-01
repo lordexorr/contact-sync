@@ -1,8 +1,9 @@
-"""Google sign-in, and read access to Google Contacts through the People API."""
+"""Google sign-in, and Google Contacts through the People API."""
 import base64
 import hashlib
 import json
 import logging
+import re
 import secrets
 import time
 from urllib.parse import parse_qs, urlencode, urlparse
@@ -27,6 +28,9 @@ PERSON_FIELDS = ",".join([
     "imClients", "memberships", "metadata", "names", "nicknames",
     "organizations", "phoneNumbers", "photos", "relations", "urls", "userDefined",
 ])
+# Google limits how many changes one account takes a minute, and wants them one at a time.
+WRITE_GAP = 1.1  # seconds between writes
+RETRY_WAITS = (30, 60, 120)  # seconds to wait each time Google asks to slow down
 
 
 class GoogleError(Exception):
@@ -106,6 +110,7 @@ class GoogleContacts:
         self._client_secret = client_secret
         self._access_token = ""
         self._expires_at = 0.0
+        self._last_write = 0.0
 
     def __enter__(self):
         return self
@@ -125,6 +130,49 @@ class GoogleContacts:
     def fetch_groups(self) -> list[dict]:
         return self._list("contactGroups", "contactGroups",
                           {"groupFields": "name,groupType,memberCount", "pageSize": 1000})
+
+    def update_contact(self, resource: str, body: dict, fields: list[str]) -> None:
+        self._write("PATCH", f"{resource}:updateContact", body, {"updatePersonFields": ",".join(fields)})
+
+    def create_contact(self, body: dict) -> str:
+        return self._write("POST", "people:createContact", body)["resourceName"]
+
+    def delete_contact(self, resource: str) -> None:
+        self._write("DELETE", f"{resource}:deleteContact")
+
+    def update_photo(self, resource: str, data: bytes) -> None:
+        self._write("PATCH", f"{resource}:updateContactPhoto", {"photoBytes": base64.b64encode(data).decode()})
+
+    def delete_photo(self, resource: str) -> None:
+        self._write("DELETE", f"{resource}:deleteContactPhoto")
+
+    def create_group(self, name: str) -> str:
+        return self._write("POST", "contactGroups", {"contactGroup": {"name": name}})["resourceName"]
+
+    def delete_group(self, resource: str) -> None:
+        self._write("DELETE", resource, params={"deleteContacts": "false"})  # the contacts in it stay
+
+    def modify_members(self, group: str, add: list[str], remove: list[str]) -> None:
+        for start in range(0, max(len(add), len(remove)), 1000):  # Google takes up to 1,000 at a time
+            body = {"resourceNamesToAdd": add[start:start + 1000], "resourceNamesToRemove": remove[start:start + 1000]}
+            self._write("POST", f"{group}/members:modify", {k: v for k, v in body.items() if v})
+
+    def _write(self, method: str, path: str, body: dict | None = None, params: dict | None = None) -> dict:
+        waits = list(RETRY_WAITS)
+        while True:
+            time.sleep(max(0.0, self._last_write + WRITE_GAP - time.monotonic()))
+            resp = self.session.request(method, f"{PEOPLE_API}/{path}", json=body, params=params, timeout=60,
+                                        headers={"Authorization": f"Bearer {self._token()}"})
+            self._last_write = time.monotonic()
+            if resp.status_code not in (429, 503) or not waits:
+                break
+            log.info("Google asked to slow down; waiting %d seconds", waits[0])
+            time.sleep(waits.pop(0))
+        if resp.status_code >= 400:
+            if "failedPrecondition" in resp.text or "FAILED_PRECONDITION" in resp.text:
+                raise GoogleError("It changed in Google after the check, so it was left as it is.")
+            raise GoogleError(f"Google refused the change: {_error_text(resp)}")
+        return resp.json() if resp.content else {}
 
     def _list(self, path: str, key: str, params: dict) -> list[dict]:
         items, page_token = [], None
@@ -162,6 +210,12 @@ class GoogleContacts:
             self._access_token = data["access_token"]
             self._expires_at = time.time() + data.get("expires_in", 3600)
         return self._access_token
+
+
+def full_size(url: str) -> str:
+    """The address of a Google photo's original, rather than the small copy the address asks for."""
+    url = re.sub(r"=s\d+(?:-c)?$", "=s0", url)
+    return re.sub(r"/s\d+(?:-c)?/", "/s0/", url)
 
 
 def _email_from_id_token(id_token: str) -> str:

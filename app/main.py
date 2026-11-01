@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 
 from aiohttp import web
 
-from . import check, google, photos, review
+from . import apply, check, google, notify, photos, review
 from .settings import load_options
 
 log = logging.getLogger("contact_sync")
@@ -30,10 +30,16 @@ class State:
         self.check_error: str | None = None
         self.google_sign_in: dict | None = None
         self.flash: tuple[str, str] | None = None
+        self.apply_task: asyncio.Task | None = None
+        self.progress: apply.Progress | None = None
 
     @property
     def checking(self) -> bool:
         return self.check_task is not None and not self.check_task.done()
+
+    @property
+    def applying(self) -> bool:
+        return self.apply_task is not None and not self.apply_task.done()
 
     @property
     def google_configured(self) -> bool:
@@ -66,11 +72,20 @@ def next_check_at(state: State) -> datetime:
     return datetime.combine(day, state.check_time, tzinfo=state.tz)
 
 
-def start_check(state: State) -> None:
+def start_check(state: State, daily: bool = False) -> None:
+    # A check started during an apply waits for it to finish.
     if not state.checking:
         state.check_error = None
-        state.check_task = asyncio.create_task(asyncio.to_thread(check.run_check, state.options))
+        job = daily_check if daily else check.run_check
+        state.check_task = asyncio.create_task(asyncio.to_thread(job, state.options))
         state.check_task.add_done_callback(lambda task: _record_failure(state, task))
+
+
+def daily_check(options: dict) -> None:
+    """The scheduled check, then the daily notification when something is waiting."""
+    check.run_check(options)
+    if options["notify"] and (message := review.waiting_message(options)):
+        notify.send(options["notify"], "Contact Sync", message)
 
 
 def _record_failure(state: State, task: asyncio.Task) -> None:
@@ -95,7 +110,7 @@ async def daily_checks(state: State) -> None:
         now = datetime.now(state.tz)
         if started_on != now.date() and now.time() >= state.check_time:
             started_on = now.date()
-            start_check(state)
+            start_check(state, daily=True)
         await asyncio.sleep(30)
 
 
@@ -116,7 +131,7 @@ async def index(request: web.Request) -> web.Response:
     state = request.app[STATE]
     body = (
         "<h1>Contact Sync</h1>"
-        "<p class='muted'>Read-only for now: it reads every account and never writes to any of them.</p>"
+        "<p class='muted'>Checks every account daily, and writes nothing until you apply the reviewed changes.</p>"
         f"{take_flash(state)}{review_card(state)}{accounts_card(state)}{icloud_card(state)}{google_card(state)}"
     )
     # No auto-refresh during a Google sign-in: it would wipe the pasted address.
@@ -124,7 +139,9 @@ async def index(request: web.Request) -> web.Response:
 
 
 async def check_now(request: web.Request) -> web.Response:
-    start_check(request.app[STATE])
+    state = request.app[STATE]
+    if not state.applying:  # applying checks every account itself
+        start_check(state)
     raise go_to(request)
 
 
@@ -168,6 +185,40 @@ async def review_reset(request: web.Request) -> web.Response:
     review.reset()
     request.app[STATE].flash = ("ok", "Every match, choice and skip is forgotten.")
     raise go_to(request, "review")
+
+
+async def apply_page(request: web.Request) -> web.Response:
+    state = request.app[STATE]
+    if state.applying:
+        raise go_to(request, "result")
+    person = request.query.get("person") or None
+    try:
+        content = review.apply_body(review.current_plan(state.options), person, state.checking)
+    except Exception:
+        log.exception("Couldn't put the Apply page together")
+        content = "<h1>Apply changes</h1><p class='bad'>Couldn't work out the changes. Details are in the add-on's log.</p>"
+    return page(request, f"<p><a href='review'>← Review</a></p>{take_flash(state)}{content}", refresh=state.checking)
+
+
+async def apply_start(request: web.Request) -> web.Response:
+    state = request.app[STATE]
+    form = await request.post()
+    if state.checking:
+        state.flash = ("error", "A check is running. Apply once it has finished.")
+        raise go_to(request, "review")
+    if not state.applying:
+        state.progress = apply.Progress()
+        state.apply_task = asyncio.create_task(asyncio.to_thread(
+            apply.run, state.options, str(form.get("person", "")) or None, str(form.get("token", "")), state.tz,
+            state.progress))
+    raise go_to(request, "result")
+
+
+async def result_page(request: web.Request) -> web.Response:
+    state = request.app[STATE]
+    content = review.result_body(apply.load_result(), state.progress if state.applying else None,
+                                 lambda stamp: fmt_time(datetime.fromisoformat(stamp).astimezone(state.tz)))
+    return page(request, f"<p><a href='./'>← Contact Sync</a></p>{content}", refresh=state.applying)
 
 
 async def thumb(request: web.Request) -> web.StreamResponse:
@@ -249,11 +300,21 @@ def take_flash(state: State) -> str:
 
 def review_card(state: State) -> str:
     try:
-        return review.summary_card(review.current_plan(state.options))
+        return review.summary_card(review.current_plan(state.options), apply_line(state))
     except Exception:
         log.exception("Couldn't put the review together")
         return ("<section class='card'><h2>Review</h2><p class='bad'>Couldn't put the review together. "
                 "Details are in the add-on's log.</p></section>")
+
+
+def apply_line(state: State) -> str:
+    if state.applying:
+        return "<p>Applying changes… <a href='result'>Follow it</a></p>"
+    result = apply.load_result()
+    if not result:
+        return ""
+    when = fmt_time(datetime.fromisoformat(result["finished_at"]).astimezone(state.tz))
+    return f"<p class='muted'>Last applied {when}: {esc(apply.summary(result))}. <a href='result'>Details</a></p>"
 
 
 def accounts_card(state: State) -> str:
@@ -271,7 +332,8 @@ def accounts_card(state: State) -> str:
     else:
         summary = "<p class='muted'>Not checked yet.</p>"
     failure = f"<p class='bad'>{esc(state.check_error)}</p>" if state.check_error else ""
-    button = "<button disabled>Checking…</button>" if state.checking else "<button>Check now</button>"
+    button = ("<button disabled>Applying…</button>" if state.applying
+              else "<button disabled>Checking…</button>" if state.checking else "<button>Check now</button>")
     return (
         f"<section class='card'><h2>Accounts</h2>{failure}{summary}"
         f"<div class='row'><form method='post' action='check'>{button}</form>"
@@ -364,7 +426,8 @@ ul.plain li{justify-content:space-between;margin-top:0;padding:6px 0;border-bott
 ol{padding-left:20px}
 ol li{margin-bottom:8px}
 button,a.button{display:inline-block;font:inherit;text-decoration:none;padding:8px 14px;border-radius:8px;border:1px solid var(--accent);background:var(--accent);color:var(--on-accent);cursor:pointer}
-button.secondary{background:transparent;color:var(--accent)}
+button.secondary,a.button.secondary{background:transparent;color:var(--accent)}
+code{font-size:13px;overflow-wrap:anywhere}
 button:disabled{opacity:.6;cursor:default}
 input[type=text]{width:100%;font:inherit;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text)}
 .flash{margin:16px 0;padding:10px 14px;border:1px solid var(--line);border-radius:8px;background:var(--card)}
@@ -389,6 +452,8 @@ table.compare td.after select{background:transparent;border-color:var(--ok)}
 img.thumb.old{opacity:.4}
 img.thumb.new{outline:2px solid var(--ok);outline-offset:2px}
 .new{color:var(--ok)}
+.gone{color:var(--bad)}
+.note{font-size:13px;margin:0 0 4px 22px}
 td details{margin-top:4px}
 label.value{display:block}
 .toast{position:fixed;right:16px;bottom:16px;padding:8px 14px;border-radius:8px;background:var(--ok);color:#fff}
@@ -409,6 +474,9 @@ def main() -> None:
         web.post("/review/label", review_label),
         web.post("/review/skip", review_skip),
         web.post("/review/reset", review_reset),
+        web.get("/apply", apply_page),
+        web.post("/apply", apply_start),
+        web.get("/result", result_page),
         web.get(r"/thumb/{name:[0-9a-f]+\.jpg}", thumb),
         web.post("/google/start", google_start),
         web.post("/google/finish", google_finish),

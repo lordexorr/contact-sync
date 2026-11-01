@@ -4,13 +4,13 @@ A Home Assistant add-on that keeps contacts in sync across any number of iCloud 
 
 ## Status
 
-**0.2.x — review.** It matches the same person across every account and shows every change a sync would make. It doesn't change any contacts yet.
+**0.3.x — apply.** It matches the same person across every account, shows every change a sync would make, and makes the changes you apply, after backing up every account.
 
 | Stage | What it adds | Status |
 |---|---|---|
 | 1. Connection check | Reads every account and shows contact counts and errors | Done (0.1.x) |
 | 2. Review page | Matches the same person across accounts and lists every change a sync would make; skip any change or pick between conflicting values | Done (0.2.x) |
-| 3. Apply | Backs up every account, then makes the reviewed changes; a daily notification when changes are waiting | Next |
+| 3. Apply | Backs up every account, then makes the reviewed changes; later reviews carry deletions across; a daily notification when changes are waiting | Done (0.3.x) |
 
 ## Install
 
@@ -20,8 +20,9 @@ A Home Assistant add-on that keeps contacts in sync across any number of iCloud 
 
 ## How it works
 
-- **iCloud:** reads contacts over CardDAV, using an app-specific password for each Apple ID.
-- **Google:** reads contacts through the Google People API, using an OAuth client you register in your own Google Cloud project. Each Google account signs in on Google's own page.
+- **iCloud:** reads and writes contacts over CardDAV, using an app-specific password for each Apple ID.
+- **Google:** reads and writes contacts through the Google People API, using an OAuth client you register in your own Google Cloud project. Each Google account signs in on Google's own page.
+- **Notification:** sends the daily message through a Home Assistant notify entity or service, using the add-on's Home Assistant API access.
 - Everything runs on your Home Assistant machine. Passwords and Google sign-ins stay in the add-on's configuration and private storage.
 
 ## Changes

@@ -8,7 +8,7 @@ PRIVATE_DIR = Path("/data")
 # the raw contact snapshots can be opened from a PC.
 SHARED_DIR = Path("/config")
 
-DEFAULTS = {"daily_check_time": "08:00", "google": {}, "icloud_accounts": []}
+DEFAULTS = {"daily_check_time": "08:00", "notify": "", "google": {}, "icloud_accounts": []}
 ICLOUD_KEYS = ("label", "apple_id", "app_password")
 
 

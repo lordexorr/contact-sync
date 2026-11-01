@@ -1,8 +1,11 @@
-"""The review page, and the decisions made on it. Every decision is saved the moment it's made."""
+"""The review page, the Apply pages, and the decisions made on them. Every decision is saved the moment
+it's made."""
 import html
 import threading
+from collections import Counter
+from urllib.parse import quote
 
-from . import check, plan, storage
+from . import base, check, plan, storage
 from .model import Contact
 from .settings import PRIVATE_DIR
 
@@ -11,16 +14,38 @@ esc = html.escape
 _lock = threading.Lock()
 
 
-def current_plan(options: dict) -> dict | None:
-    """The review from the latest check, for the accounts still set up; None before the first check."""
+def current_records(options: dict) -> tuple[list[Contact], list[dict]] | None:
+    """The contacts and accounts from the latest check, for the accounts still set up; None before the first."""
     records = check.load_records()
     if not records:
         return None
     active = {f"icloud:{a['apple_id']}" for a in options["icloud_accounts"] if a["apple_id"] and a["app_password"]}
     active |= {f"google:{a['email']}" for a in check.google_accounts()}
     accounts = [a for a in records["accounts"] if a["key"] in active]
-    contacts = [Contact.from_dict(c) for c in records["contacts"]]
-    return plan.build(contacts, accounts, storage.read_json(DECISIONS_FILE, {}))
+    return [Contact.from_dict(c) for c in records["contacts"]], accounts
+
+
+def current_plan(options: dict) -> dict | None:
+    """The review from the latest check; None before the first check."""
+    loaded = current_records(options)
+    return plan.build(*loaded, decisions(), base.load()) if loaded else None
+
+
+def decisions() -> dict:
+    return storage.read_json(DECISIONS_FILE, {})
+
+
+def waiting_message(options: dict) -> str:
+    """What the daily notification says: what's waiting, and any account that couldn't be read. "" for nothing."""
+    lines = []
+    review = current_plan(options)
+    if review and any(review["counts"].values()):
+        lines.append(f"{_counts_line(review['counts'])}. Open Contact Sync in Home Assistant to review and apply.")
+    status = check.load_status()
+    failed = [f"{a['service']} {a['name']}: {a['error']}" for a in (status or {}).get("accounts", []) if a["error"]]
+    if failed:
+        lines.append("Couldn't read " + "; ".join(failed))
+    return "\n\n".join(lines)
 
 
 # --- Decisions ---
@@ -45,9 +70,11 @@ def set_skip(change_id: str, keep: bool) -> None:
         return
 
     def change(d):
-        skips = set(d.get("skips", []))
+        # "keeps" holds what was ticked again, so a value an account deleted can be kept everywhere instead.
+        skips, keeps = set(d.get("skips", [])), set(d.get("keeps", []))
         (skips.discard if keep else skips.add)(change_id)
-        d["skips"] = sorted(skips)
+        (keeps.add if keep else keeps.discard)(change_id)
+        d["skips"], d["keeps"] = sorted(skips), sorted(keeps)
     _update(change)
 
 
@@ -64,14 +91,16 @@ def _update(change) -> None:
 
 # --- HTML ---
 
-def summary_card(review: dict | None) -> str:
+def summary_card(review: dict | None, last_apply: str = "") -> str:
     head = "<section class='card'><h2>Review</h2>"
     if review is None:
-        return head + "<p class='muted'>Nothing to review until the first check has run.</p></section>"
-    if not any(review["counts"].values()):
-        return head + "<p class='ok'>Every account matches. There's nothing to sync.</p></section>"
-    return (head + f"<p>{_counts_line(review['counts'])}</p>"
-            "<div class='row'><a class='button' href='review'>Open the review</a></div></section>")
+        body = "<p class='muted'>Nothing to review until the first check has run.</p>"
+    elif not any(review["counts"].values()):
+        body = "<p class='ok'>Every account matches. There's nothing to sync.</p>"
+    else:
+        body = (f"<p>{_counts_line(review['counts'])}</p>"
+                "<div class='row'><a class='button' href='review'>Open the review</a></div>")
+    return head + body + last_apply + "</section>"
 
 
 def page_body(review: dict | None) -> str:
@@ -79,10 +108,12 @@ def page_body(review: dict | None) -> str:
         return "<h1>Review</h1><p class='muted'>Nothing to review until the first check has run.</p>"
     parts = [
         "<h1>Review</h1>",
-        "<p class='muted'>Nothing here has been written to any account. Everything you choose is saved as "
+        "<p class='muted'>Nothing is written to any account until you apply. Everything you choose is saved as "
         "you click it, and kept for later checks.</p>",
         f"<p>{_counts_line(review['counts'])}</p>",
     ]
+    if not plan.is_empty(plan.scope(review)):
+        parts.append("<div class='row'><a class='button' href='apply'>Apply changes…</a></div>")
     if review["suggestions"]:
         parts.append(_suggestions(review["suggestions"]))
     if review["conflicts"]:
@@ -163,7 +194,8 @@ def _changes(review: dict) -> str:
     columns = review["columns"]
 
     def tables(skipped: bool) -> list[str]:
-        out = [_table(p["name"], columns, [r for r in p["rows"] if r["skipped"] == skipped]) for p in review["people"]]
+        out = [_table(p["name"], columns, [r for r in p["rows"] if r["skipped"] == skipped],
+                      "" if skipped else _person_footer(review, p)) for p in review["people"]]
         out.append(_table("Groups", columns, [r for r in review["groups"] if r["skipped"] == skipped]))
         return [t for t in out if t]
 
@@ -173,7 +205,9 @@ def _changes(review: dict) -> str:
         "<p class='muted'>Each table shows what every account has now, and in the green last column what all of "
         "them will have after the sync. Struck-through values would be replaced or removed, and values marked + "
         "would be added. Untick a row to leave every account as it is. In a list, untick a value to leave it out "
-        "of every account.</p>"
+        "of every account.</p><p class='muted'>Something deleted from one account since the last sync is "
+        "deleted from the others too. In a list such a value starts unticked: tick it to keep it everywhere "
+        "instead.</p>"
     )
     folded = (f"<details class='fold'><summary>Ignored ({count:,})</summary><p class='muted'>Tick a row "
               f"to bring it back.</p>{''.join(ignored)}</details>" if ignored else "")
@@ -181,13 +215,22 @@ def _changes(review: dict) -> str:
     return f"<section class='card'><h2>Changes</h2>{legend}{body}{folded}</section>"
 
 
-def _table(title: str, columns: list[str], rows: list[dict]) -> str:
+def _person_footer(review: dict, person: dict) -> str:
+    if person["held"]:
+        return "<p class='muted'>Waiting on a possible match above. Answer it to apply this person's changes.</p>"
+    if plan.is_empty(plan.scope(review, person["key"])):
+        return ""
+    return (f"<div class='row'><a class='button secondary' href='apply?person={esc(quote(person['key'], safe=''))}'>"
+            f"Apply just {esc(person['name'])}…</a></div>")
+
+
+def _table(title: str, columns: list[str], rows: list[dict], footer: str = "") -> str:
     if not rows:
         return ""
     head = "".join(f"<th>{esc(c)}</th>" for c in columns)
     body = "".join(_row(r, columns) for r in rows)
     return (f"<div class='item'><b>{esc(title)}</b><div class='scroll'><table class='compare'><thead><tr><th></th>"
-            f"{head}<th>After sync</th></tr></thead><tbody>{body}</tbody></table></div></div>")
+            f"{head}<th>After sync</th></tr></thead><tbody>{body}</tbody></table></div>{footer}</div>")
 
 
 def _row(row: dict, columns: list[str]) -> str:
@@ -201,7 +244,8 @@ def _row(row: dict, columns: list[str]) -> str:
 
 def _cell(items: list[dict]) -> str:
     """An account's current values: struck through when the sync replaces or removes them ("old"), "+" for
-    values it would gain ("new"), and a note on an empty cell the sync would fill ("add")."""
+    values it would gain ("new"), "−" for members a group would lose ("gone"), a note on an empty cell the
+    sync would fill ("add"), and plain notes ("note")."""
     out = []
     for i in items:
         state = i.get("state", "")
@@ -211,6 +255,10 @@ def _cell(items: list[dict]) -> str:
             out.append(f"<div class='old'>{esc(i['text'])}</div>")
         elif state == "new":
             out.append(f"<div class='new'>+ {esc(i['text'])}</div>")
+        elif state == "gone":
+            out.append(f"<div class='gone'>− {esc(i['text'])}</div>")
+        elif state == "note":
+            out.append(f"<div class='muted'>{esc(i['text'])}</div>")
         elif state == "add":
             out.append(f"<div>{esc(i['text'])} <span class='new'>· will be added</span></div>")
         else:
@@ -227,6 +275,7 @@ def _after(after: dict) -> str:
         return "".join(
             f"<label class='value'><input type='checkbox' class='skip' autocomplete='off' data-id='{esc(i['id'])}'"
             f"{' checked' if i['kept'] else ''}> {esc(i['text'])}</label>"
+            + (f"<div class='muted note'>{esc(i['note'])}</div>" if i.get("note") else "")
             for i in after["items"]
         )
     if kind == "label":
@@ -244,8 +293,122 @@ def _thumb(fingerprint: str, extra_class: str = "") -> str:
 
 def _duplicates(items: list[dict]) -> str:
     rows = "".join(f"<li>{esc(d['person'])}: {d['count']} copies in {esc(d['account'])}</li>" for d in items)
-    return ("<section class='card'><h2>Duplicates within one account</h2><p class='muted'>Listed for now. "
-            f"Applying changes, in a later version, will offer to merge them.</p><ul>{rows}</ul></section>")
+    return ("<section class='card'><h2>Duplicates within one account</h2><p class='muted'>Applying updates one "
+            f"copy in each account and leaves the others as they are.</p><ul>{rows}</ul></section>")
+
+
+def apply_body(review: dict | None, person: str | None, checking: bool) -> str:
+    """The page before applying: what changes in each account, and the Apply now button."""
+    if review is None:
+        return "<h1>Apply changes</h1><p class='muted'>Nothing to apply until the first check has run.</p>"
+    people = review["sync"]["people"]
+    heading = f"<h1>Apply {esc(people[person]['name'])}</h1>" if person in people else "<h1>Apply changes</h1>"
+    work = plan.scope(review, person)
+    notes = []
+    if person is None and (held := plan.held_back(review)):
+        notes.append(f"{_n(held, 'person', 'people')} waiting on a possible match {'is' if held == 1 else 'are'} "
+                     "left out until you answer it in the review.")
+    elif person in people and people[person]["held"]:
+        notes.append("This person is waiting on a possible match. Answer it in the review first.")
+    undecided = sum(not c["decided"] and (person is None or c["id"].startswith(person + "|"))
+                    for c in review["conflicts"])
+    if undecided and not plan.is_empty(work):
+        notes.append(f"{_n(undecided, 'value')} between accounts {'hasn' if undecided == 1 else 'haven'}'t been "
+                     "picked. The value marked in the review is used.")
+    notes_html = "".join(f"<p class='muted'>{esc(n)}</p>" for n in notes)
+    back = "<a href='review'>Back to the review</a>"
+    if plan.is_empty(work):
+        return f"{heading}{notes_html}<p>Nothing to apply.</p><p>{back}</p>"
+    if checking:
+        return f"{heading}<p class='muted'>A check is running. This page is ready once it finishes.</p>"
+    return (
+        f"{heading}{_totals(work)}{notes_html}{_STEPS}"
+        "<form method='post' action='apply' onsubmit=\"this.querySelector('button').disabled=true\">"
+        f"<input type='hidden' name='person' value='{esc(person or '')}'>"
+        f"<input type='hidden' name='token' value='{plan.digest(work)}'>"
+        f"<div class='row'><button>Apply now</button>{back}</div></form>"
+    )
+
+
+def result_body(result: dict | None, progress, when) -> str:
+    """While applying, how far it has got; afterwards, every change made and every one that failed."""
+    if progress is not None:
+        count = f" · {progress.done:,} of {progress.total:,}" if progress.total else ""
+        return (f"<h1>Applying changes…</h1><p>{esc(progress.step)}{count}</p>"
+                "<p class='muted'>This page updates itself. Leaving it doesn't stop anything.</p>")
+    if not result:
+        return "<h1>Apply</h1><p class='muted'>Nothing has been applied yet.</p>"
+    title = {"done": "Applied", "stopped": "Stopped", "failed": "Apply failed"}[result["status"]]
+    who = f" {esc(result['person'])}" if result["person"] else ""
+    parts = [f"<h1>{title}{who}</h1>", f"<p class='muted'>{esc(when(result['finished_at']))}</p>"]
+    if result["message"]:
+        parts.append(f"<p class='{'muted' if result['status'] == 'done' else 'bad'}'>{esc(result['message'])}</p>")
+    if result["backup"]:
+        parts.append("<p class='muted'>Backed up first to <code>addon_configs/local_contact_sync/backups/"
+                     f"{esc(result['backup'])}</code>.</p>")
+    failed = [c for c in result["changes"] if c["error"]]
+    made = [c for c in result["changes"] if not c["error"]]
+    if failed:
+        parts.append(f"<section class='card'><h2>Not made ({len(failed):,})</h2>{_change_table(failed)}</section>")
+    if made:
+        parts.append(f"<section class='card'><h2>Made ({len(made):,})</h2>{_change_table(made)}</section>")
+    parts.append("<div class='row'><a class='button' href='review'>Open the review</a></div>")
+    return "".join(parts)
+
+
+_STEPS = (
+    "<p>When you press <b>Apply now</b>, Contact Sync:</p><ol>"
+    "<li>Checks every account again, and stops without writing anything if something changed since this page "
+    "opened.</li>"
+    "<li>Backs up every account to <code>addon_configs/local_contact_sync/backups</code>, keeping the last 10 "
+    "backups.</li>"
+    "<li>Makes these changes. Only the details shown in the review are touched; everything else on each contact "
+    "stays as it is.</li>"
+    "<li>Checks again and records what every account holds, so later reviews can tell a deletion from a detail "
+    "that was never synced.</li></ol>"
+)
+
+
+def _totals(work: dict) -> str:
+    """Per account: contacts added, updated and deleted, groups created and deleted, and group members."""
+    counts = {a: Counter() for a in work["names"]}
+    for p in work["people"].values():
+        for ref in p["delete"]:
+            counts[ref.partition("|")[0]]["deleted"] += 1
+        for a in p["update"]:
+            counts[a]["updated"] += 1
+        for a in (p["create"] or {}).get("accounts", []):
+            counts[a]["added"] += 1
+    for op in work["groups"]:
+        c = counts[op["account"]]
+        c["deleted groups" if op["delete"] else "created groups"] += op["delete"] or op["create"]
+        c["joins"] += len(op["add"])
+        c["leaves"] += len(op["remove"])
+    rows = []
+    for a, name in work["names"].items():
+        c = counts[a]
+        if not +c:
+            continue
+        groups = ", ".join(f"{c[k]:,} {k.split()[0]}" for k in ("created groups", "deleted groups") if c[k])
+        members = ", ".join(filter(None, (f"{c['joins']:,} added" if c["joins"] else "",
+                                          f"{c['leaves']:,} taken out" if c["leaves"] else "")))
+        rows.append(f"<tr><td>{esc(name)}</td>" + "".join(f"<td class='num'>{c[k]:,}</td>" for k in
+                                                          ("added", "updated", "deleted"))
+                    + f"<td>{groups or '–'}</td><td>{members or '–'}</td></tr>")
+    return ("<div class='scroll'><table><thead><tr><th>Account</th><th class='num'>Contacts added</th>"
+            "<th class='num'>Updated</th><th class='num'>Deleted</th><th>Groups</th><th>Group members</th></tr>"
+            f"</thead><tbody>{''.join(rows)}</tbody></table></div>")
+
+
+def _change_table(changes: list[dict]) -> str:
+    errors = any(c["error"] for c in changes)
+    head = "<th>Account</th><th>Contact or group</th><th>Change</th>" + ("<th>Why not</th>" if errors else "")
+    rows = "".join(
+        f"<tr><td>{esc(c['account'])}</td><td>{esc(c['subject'])}</td><td>{esc(c['what'])}</td>"
+        + (f"<td class='bad'>{esc(c['error'])}</td>" if errors else "") + "</tr>"
+        for c in changes
+    )
+    return f"<div class='scroll'><table><thead><tr>{head}</tr></thead><tbody>{rows}</tbody></table></div>"
 
 
 def _n(count: int, one: str, many: str = "") -> str:

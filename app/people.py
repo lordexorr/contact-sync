@@ -1,5 +1,17 @@
-"""Reading Google contacts."""
-from .model import Contact, Value, address_key, email_key, fold, label, phone_key, url_key
+"""Reading and writing Google contacts."""
+from .model import LABEL_NAMES, Contact, Value, address_key, email_key, fold, label, phone_key, url_key
+
+NAME_KEYS = ("honorificPrefix", "givenName", "middleName", "familyName", "honorificSuffix")
+# Each list field's name in the People API.
+LISTS = {"phones": "phoneNumbers", "emails": "emailAddresses", "addresses": "addresses", "urls": "urls",
+         "related": "relations"}
+_KEYS = {"phones": phone_key, "emails": email_key, "urls": url_key, "related": fold}
+# Google's own types, which it translates when showing them. Any other label is stored as typed.
+_TYPES = {t.lower(): t for t in (
+    "home", "work", "mobile", "homeFax", "workFax", "otherFax", "pager", "workMobile", "workPager", "main",
+    "googleVoice", "other", "blog", "profile", "homePage", "ftp", "reservations", "appInstallPage", "spouse",
+    "child", "mother", "father", "parent", "brother", "sister", "friend", "relative", "domesticPartner",
+    "manager", "assistant", "referredBy", "partner")}
 
 
 def read(account: str, person: dict, group_names: dict[str, str]) -> tuple[Contact, str]:
@@ -9,10 +21,7 @@ def read(account: str, person: dict, group_names: dict[str, str]) -> tuple[Conta
     """
     c = Contact(account=account, id=person["resourceName"])
     if names := _own(person.get("names")):
-        n = names[0]
-        c.prefix, c.given, c.middle, c.family, c.suffix = (
-            n.get(k, "") for k in ("honorificPrefix", "givenName", "middleName", "familyName", "honorificSuffix")
-        )
+        c.prefix, c.given, c.middle, c.family, c.suffix = (names[0].get(k, "") for k in NAME_KEYS)
     if nicknames := _own(person.get("nicknames")):
         c.nickname = nicknames[0].get("value", "")
     if orgs := _own(person.get("organizations")):
@@ -24,20 +33,8 @@ def read(account: str, person: dict, group_names: dict[str, str]) -> tuple[Conta
             break
     if notes := _own(person.get("biographies")):
         c.note = notes[0].get("value", "")
-    for e in _own(person.get("phoneNumbers")):
-        c.phones.append(_value(e, e.get("value", ""), phone_key))
-    for e in _own(person.get("emailAddresses")):
-        c.emails.append(_value(e, e.get("value", ""), email_key))
-    for e in _own(person.get("urls")):
-        c.urls.append(_value(e, e.get("value", ""), url_key))
-    for e in _own(person.get("relations")):
-        c.related.append(_value(e, e.get("person", ""), fold))
-    for e in _own(person.get("addresses")):
-        street = "\n".join(filter(None, (e.get("streetAddress", ""), e.get("extendedAddress", ""))))
-        parts = [street, e.get("city", ""), e.get("region", ""), e.get("postalCode", ""), e.get("country", "")]
-        text = e.get("formattedValue", "").replace("\n", ", ") or ", ".join(filter(None, parts))
-        tag, odd = label(e.get("type", ""))
-        c.addresses.append(Value(text, tag, address_key(street, parts[1], parts[3]), parts, odd))
+    for field, name in LISTS.items():
+        getattr(c, field).extend(_value(field, e) for e in _own(person.get(name)))
     c.groups = sorted({
         group_names[g] for m in person.get("memberships", [])
         if (g := m.get("contactGroupMembership", {}).get("contactGroupResourceName")) in group_names
@@ -54,11 +51,116 @@ def read(account: str, person: dict, group_names: dict[str, str]) -> tuple[Conta
     return c, photo
 
 
+def edit(person: dict, changes: dict) -> tuple[dict, list[str]]:
+    """An updateContact body making changes (an edit from the plan, apart from its photo), and the fields it
+    replaces. It carries only the contact's own entries, each with every part Google sent; entries shown
+    from the person's Google profile aren't the contact's, and stay as they are."""
+    body = _changed(person, changes)
+    sources = [s for s in person.get("metadata", {}).get("sources", []) if s.get("type") == "CONTACT"]
+    return {**body, "etag": person.get("etag", ""), "metadata": {"sources": sources}}, sorted(body)
+
+
+def new(changes: dict) -> dict:
+    """A createContact body for a new contact, filled by changes."""
+    return {k: v for k, v in _changed({}, changes).items() if v}
+
+
+def google_type(value_label: str) -> str:
+    """A label as Google stores it: one of its own types, or the label as shown here."""
+    return _TYPES.get(value_label.lower().replace(" ", ""), LABEL_NAMES.get(value_label, value_label))
+
+
+def _changed(person: dict, changes: dict) -> dict:
+    def own(name: str) -> list[dict]:
+        return [dict(e) for e in _own(person.get(name))]
+
+    body, s = {}, changes["set"]
+    if "name" in s:
+        names = own("names")
+        entry = names[0] if names else {}
+        for derived in ("displayName", "displayNameLastFirst", "unstructuredName"):
+            entry.pop(derived, None)
+        body["names"] = [_put(entry, dict(zip(NAME_KEYS, s["name"])))]
+    if "nickname" in s:
+        body["nicknames"] = _first(own("nicknames"), {"value": s["nickname"]})
+    if "company" in s or "title" in s:
+        values = {key: s[field] for field, key in (("company", "name"), ("title", "title")) if field in s}
+        body["organizations"] = _first(own("organizations"), values, ("name", "title"))
+    if "birthday" in s:
+        entries = own("birthdays")
+        if s["birthday"]:
+            year, month, day = s["birthday"].rsplit("-", 2)
+            date = {"month": int(month), "day": int(day)} | ({"year": int(year)} if year.isdigit() else {})
+            entry = entries[0] if entries else {}
+            entry.pop("text", None)
+            body["birthdays"] = [{**entry, "date": date}]
+        else:
+            body["birthdays"] = []
+    if "note" in s:
+        body["biographies"] = _first(own("biographies"), {"value": s["note"]})
+        for entry in body["biographies"][:1]:
+            entry.setdefault("contentType", "TEXT_PLAIN")
+    for field, name in LISTS.items():
+        removing = {r["key"] for r in changes["remove"] if r["field"] == field}
+        relabel = {r["key"]: r["label"] for r in changes["relabel"] if r["field"] == field}
+        adding = [a for a in changes["add"] if a["field"] == field]
+        if not (removing or relabel or adding):
+            continue
+        entries = []
+        for e in own(name):
+            v = _value(field, e)
+            key = v.key or fold(v.value)
+            if key in removing:
+                continue
+            if key in relabel:
+                e.pop("formattedType", None)
+                e["type"] = google_type(relabel[key])
+            entries.append(e)
+        body[name] = entries + [_entry(field, a) for a in adding]
+    return body
+
+
+def _put(entry: dict, values: dict) -> dict:
+    for key, value in values.items():
+        if value:
+            entry[key] = value
+        else:
+            entry.pop(key, None)
+    return entry
+
+
+def _first(entries: list[dict], values: dict, keep: tuple = ()) -> list[dict]:
+    """entries with the first one holding values (made if there's none), dropped if left without any of keep."""
+    entry = _put(entries[0] if entries else {}, values)
+    return ([entry] if any(entry.get(k) for k in keep or values) else []) + entries[1:]
+
+
+def _entry(field: str, value: dict) -> dict:
+    if field == "addresses":
+        street, city, region, postcode, country = (list(value["parts"]) + [""] * 5)[:5]
+        first, _, rest = street.partition("\n")
+        entry = {k: v for k, v in (("streetAddress", first), ("extendedAddress", rest.replace("\n", ", ")),
+                                   ("city", city), ("region", region), ("postalCode", postcode),
+                                   ("country", country)) if v}
+    else:
+        entry = {"person" if field == "related" else "value": value["value"]}
+    if value["label"]:
+        entry["type"] = google_type(value["label"])
+    return entry
+
+
 def _own(entries) -> list[dict]:
     """Entries the contact itself holds, leaving out ones shown from the person's own Google profile."""
     return [e for e in entries or [] if e.get("metadata", {}).get("source", {}).get("type") == "CONTACT"]
 
 
-def _value(entry: dict, value: str, key) -> Value:
+def _value(field: str, entry: dict) -> Value:
     tag, odd = label(entry.get("type", ""))
-    return Value(value, tag, key(value), odd=odd)
+    if field == "addresses":
+        street = "\n".join(filter(None, (entry.get("streetAddress", ""), entry.get("extendedAddress", ""))))
+        parts = [street, entry.get("city", ""), entry.get("region", ""), entry.get("postalCode", ""),
+                 entry.get("country", "")]
+        text = entry.get("formattedValue", "").replace("\n", ", ") or ", ".join(filter(None, parts))
+        return Value(text, tag, address_key(street, parts[1], parts[3]), parts, odd)
+    value = entry.get("person" if field == "related" else "value", "")
+    return Value(value, tag, _KEYS[field](value), odd=odd)
