@@ -51,3 +51,5 @@ Then press **Check now**. Each account should show its contact count.
 | Apple app-specific passwords, Google client ID and secret | The add-on's Configuration tab |
 | Google sign-ins, last check results | The add-on's private storage |
 | Raw contact snapshots from the latest check | `addon_configs/local_contact_sync/snapshots` on the Samba share |
+
+The snapshots are kept under `addon_configs`, outside the add-on's own folder, so contact data can never end up in the add-on's code or on GitHub. Home Assistant gives every add-on a folder there for files you can open.
