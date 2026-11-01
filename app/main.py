@@ -387,6 +387,7 @@ table.compare td.after{min-width:180px;background:color-mix(in srgb,var(--ok) 14
 table.compare td.after select{background:transparent;border-color:var(--ok)}
 .old{text-decoration:line-through;opacity:.55}
 img.thumb.old{opacity:.4}
+img.thumb.new{outline:2px solid var(--ok);outline-offset:2px}
 .new{color:var(--ok)}
 td details{margin-top:4px}
 label.value{display:block}

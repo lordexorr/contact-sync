@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.9
+
+- An account cell that would change now shows its new value below the old one, the way lists do: the old label, name, birthday or other value struck through, and the new one marked + in green. A replaced photo shows the new one, outlined in green, next to the faded old one.
+
 ## 0.2.8
 
 - Label dropdowns in the **After sync** column show its green, like the other values there, instead of a plain background.

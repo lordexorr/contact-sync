@@ -206,7 +206,7 @@ def _cell(items: list[dict]) -> str:
     for i in items:
         state = i.get("state", "")
         if "thumb" in i:
-            out.append(_thumb(i["thumb"], "old" if state == "old" else ""))
+            out.append(_thumb(i["thumb"], state))
         elif state == "old":
             out.append(f"<div class='old'>{esc(i['text'])}</div>")
         elif state == "new":

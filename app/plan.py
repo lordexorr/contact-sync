@@ -193,12 +193,12 @@ def _row(row_id: str, title: str, cells: dict, changing: list[str], names: dict,
             "skipped": row_id in skips}
 
 
-def _was(text: str, changing: bool) -> dict:
-    """A cell item for an account's current value: marked "old" when the sync would replace it, or "add" when
-    the account has nothing and the sync would fill it in."""
+def _now(old: str, new: str, changing: bool) -> list[dict]:
+    """An account's current value and, when the sync would change it, the new value below it: the old one
+    struck through ("old") and the new one marked + ("new"), the same way lists show it."""
     if not changing:
-        return {"text": text or "—"}
-    return {"text": text, "state": "old"} if text else {"text": "—", "state": "add"}
+        return [{"text": old or "—"}]
+    return ([{"text": old, "state": "old"}] if old else []) + [{"text": new, "state": "new"}]
 
 
 def _contact_row(key: str, first: dict, missing: list[str], merged: dict, names: dict, skips: set) -> dict:
@@ -218,15 +218,20 @@ def _field_rows(key: str, first: dict, merged: dict, names: dict, skips: set) ->
         have = {a: c.name() if field == "name" else getattr(c, field) for a, c in first.items()}
         changing = [a for a, old in have.items() if (old != new if field == "birthday" else fold(old) != fold(new))]
         if changing:
-            cells = {names[a]: [_was(show(field, old), a in changing)] for a, old in have.items()}
+            cells = {names[a]: _now(show(field, old), show(field, new), a in changing) for a, old in have.items()}
             rows.append(_row(f"{key}|field:{field}", title, cells, changing, names,
                              {"kind": "text", "value": show(field, new)}, skips))
     photo = merged["photo"]
     if photo:
         changing = [a for a, c in first.items() if c.photo != "?" and not (c.photo and photos.same(c.photo, photo))]
         if changing:
-            cells = {names[a]: [{"thumb": c.photo, "state": "old" if a in changing else ""}]
-                     if c.photo not in ("", "?") else [_was("", a in changing)] for a, c in first.items()}
+            cells = {}
+            for a, c in first.items():
+                had = c.photo not in ("", "?")
+                if a in changing:
+                    cells[names[a]] = ([{"thumb": c.photo, "state": "old"}] if had else []) + [{"thumb": photo, "state": "new"}]
+                else:
+                    cells[names[a]] = [{"thumb": c.photo}] if had else [{"text": "—"}]
             rows.append(_row(f"{key}|field:photo", "Photo", cells, changing, names,
                              {"kind": "photo", "thumb": photo}, skips))
     for field, noun in MULTI.items():
@@ -246,7 +251,7 @@ def _list_rows(key: str, field: str, noun: str, first: dict, merged: dict, names
             row_id = f"{key}|{field}~{v.key}"  # also the id of the label picked in the dropdown
             seen = {m.label for m in holders.values() if m.label}
             options = list(dict.fromkeys(LABEL_CHOICES[field] + sorted(seen, key=str.lower) + [v.label]))
-            cells = {names[a]: [_was("PREF" if m.odd else label_text(m.label), a in changing)]
+            cells = {names[a]: _now("PREF" if m.odd else label_text(m.label), label_text(v.label), a in changing)
                      for a, m in holders.items()}
             after = {"kind": "label", "id": row_id, "options": [(o, label_text(o)) for o in options], "chosen": v.label}
             rows.append(_row(row_id, f"Label of {v.value}", cells, changing, names, after, skips))
