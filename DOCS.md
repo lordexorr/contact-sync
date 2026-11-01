@@ -48,12 +48,12 @@ Then press **Check now**. Each account should show its contact count.
 
 After each check, the **Review** section at the top of the Contact Sync page counts what a sync would change. **Open the review** shows the details.
 
-- **Possible matches:** two contacts that might be the same person: the same name twice in one account, the same name with different phone numbers, emails or birthdays, or the same phone number or email address under different names. Each side shows everything that copy holds. Choose **Same person** or **Different people**.
-- **Different values:** a name, nickname, company, job title, birthday, note or photo that differs between accounts. The value from the most recently changed contact is selected; pick another and press **Use the selected value** to change it.
-- **Changes:** everything each account would get: new contacts; missing phone numbers, emails, addresses, websites, related names, birthdays and photos; a label for any phone number, email, address or website whose label differs between accounts or is an odd one like "PREF", picked from a list; and groups to create or add contacts to. Google labels count as groups. Untick anything you don't want and press **Save choices**; unticked changes move to a collapsed **Ignored** section at the bottom, where ticking one and saving brings it back.
+- **Possible matches:** two contacts that might be the same person: the same name twice in one account, the same name with different phone numbers, emails or birthdays, or the same phone number or email address under different names. Each side shows everything that copy holds. Choose **Same person** or **Different people**, and the card goes away.
+- **Different values:** a name, nickname, company, job title, birthday, note or photo that differs between accounts. Pick the value every account should have, and it moves to a collapsed **Decided** section. Until you pick, the value from the most recently changed contact is used, and it's marked as such.
+- **Changes:** everything each account would get: new contacts; missing phone numbers, emails, addresses, websites, related names, birthdays and photos; a label for any phone number, email, address or website whose label differs between accounts or is an odd one like "PREF", picked from a list; and groups to create or add contacts to. Google labels count as groups. Untick anything you don't want, and it moves to a collapsed **Ignored** section at the bottom, where ticking it again brings it back.
 - **Start over** forgets every match, choice and skip.
 
-Contacts are matched automatically when they share a phone number or email address and their names agree, or when they have the same full name in different accounts and nothing contradicts it. Being matched only means the copies are the same person: every difference between them still appears under **Changes**. Your decisions are kept for later checks.
+Contacts are matched automatically when they share a phone number or email address and their names agree, or when they have the same full name in different accounts and nothing contradicts it. Being matched only means the copies are the same person: every difference between them still appears under **Changes**. Everything you choose is saved the moment you click it, and kept for later checks.
 
 ## Where things are kept
 

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.4
+
+- The review saves every click straight away: ticking or unticking a change, choosing a label, picking a value, or answering a possible match. There are no Save buttons any more; a short "Saved" note confirms each one, and the page keeps your place.
+- Handled items move out of the way: answered matches disappear, picked values move to a collapsed **Decided** section, and unticked changes to **Ignored**.
+- Values still to decide show nothing selected, with the value that will be used marked, so any pick counts as a decision.
+
 ## 0.2.3
 
 - Label fixes have a dropdown: pick the label for a phone number, email, address or website instead of only accepting "other". It offers the labels iCloud and Google both have, plus any label already on that value, and starts on the label another account already uses, or "other" when the only label is an odd one like "PREF".

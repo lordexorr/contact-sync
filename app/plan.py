@@ -46,7 +46,7 @@ def build(contacts: list[Contact], accounts: list[dict], decisions: dict) -> dic
         members = [by_ref[r] for r in refs]
         key = refs[0]
         merged, conflicts = _merge(key, members, picks, names)
-        review["conflicts"] += [{**c, "person": merged["display"]} for c in conflicts]
+        review["conflicts"] += [{**c, "person": merged["display"], "decided": c["id"] in picks} for c in conflicts]
         changes = []
         for account in names:
             mine = [c for c in members if c.account == account]
@@ -75,7 +75,7 @@ def build(contacts: list[Contact], accounts: list[dict], decisions: dict) -> dic
     review["counts"] = {
         "changes": len(waiting),
         "suggestions": len(review["suggestions"]),
-        "conflicts": len(review["conflicts"]),
+        "conflicts": sum(not c["decided"] for c in review["conflicts"]),
     }
     return review
 

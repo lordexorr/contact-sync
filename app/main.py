@@ -138,24 +138,30 @@ async def review_page(request: web.Request) -> web.Response:
     return page(request, f"<p><a href='./'>← Contact Sync</a></p>{take_flash(state)}{content}")
 
 
+# The review page saves each click in the background and reloads itself, so these answer with no content.
+
 async def review_match(request: web.Request) -> web.Response:
     form = await request.post()
     review.decide_match(str(form.get("pair", "")), str(form.get("decision", "")))
-    raise go_to(request, "review")
+    return web.Response(status=204)
 
 
 async def review_pick(request: web.Request) -> web.Response:
     form = await request.post()
     review.pick(str(form.get("conflict", "")), str(form.get("choice", "")))
-    raise go_to(request, "review")
+    return web.Response(status=204)
 
 
-async def review_changes(request: web.Request) -> web.Response:
+async def review_label(request: web.Request) -> web.Response:
     form = await request.post()
-    labels = {k.removeprefix("label:"): str(v) for k, v in form.items() if k.startswith("label:")}
-    review.save_changes([str(v) for v in form.getall("shown", [])], {str(v) for v in form.getall("keep", [])}, labels)
-    request.app[STATE].flash = ("ok", "Choices saved.")
-    raise go_to(request, "review")
+    review.pick(str(form.get("id", "")), str(form.get("label", "")))
+    return web.Response(status=204)
+
+
+async def review_skip(request: web.Request) -> web.Response:
+    form = await request.post()
+    review.set_skip(str(form.get("id", "")), bool(form.get("keep")))
+    return web.Response(status=204)
 
 
 async def review_reset(request: web.Request) -> web.Response:
@@ -373,8 +379,10 @@ ul.changes li{padding:3px 0}
 img.thumb{width:48px;height:48px;border-radius:50%;object-fit:cover;vertical-align:middle;margin-left:8px}
 li details{margin:2px 0 0 26px}
 select{font:inherit;padding:3px 6px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--text)}
-details.ignored{margin-top:16px}
-details.ignored>summary{cursor:pointer;font-weight:600}
+details.fold{margin-top:16px}
+details.fold>summary{cursor:pointer;font-weight:600}
+.toast{position:fixed;right:16px;bottom:16px;padding:8px 14px;border-radius:8px;background:var(--ok);color:#fff}
+.toast.error{background:var(--bad)}
 """
 
 
@@ -388,7 +396,8 @@ def main() -> None:
         web.get("/review", review_page),
         web.post("/review/match", review_match),
         web.post("/review/pick", review_pick),
-        web.post("/review/changes", review_changes),
+        web.post("/review/label", review_label),
+        web.post("/review/skip", review_skip),
         web.post("/review/reset", review_reset),
         web.get(r"/thumb/{name:[0-9a-f]+\.jpg}", thumb),
         web.post("/google/start", google_start),

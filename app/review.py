@@ -1,4 +1,4 @@
-"""The review page, and the decisions made on it."""
+"""The review page, and the decisions made on it. Every decision is saved the moment it's made."""
 import html
 import threading
 
@@ -34,17 +34,20 @@ def decide_match(pair: str, decision: str) -> None:
     _update(change)
 
 
-def pick(conflict: str, choice: str) -> None:
-    if conflict and choice:
-        _update(lambda d: d.setdefault("picks", {}).update({conflict: choice}))
+def pick(choice_id: str, choice: str) -> None:
+    """A value picked for a field that differs between accounts, or a label picked for one value."""
+    if choice_id and choice:
+        _update(lambda d: d.setdefault("picks", {}).update({choice_id: choice}))
 
 
-def save_changes(shown: list[str], kept: set[str], labels: dict[str, str]) -> None:
-    """Every change shown on the page that wasn't left ticked is skipped from now on, and every label
-    chosen from a dropdown is kept."""
+def set_skip(change_id: str, keep: bool) -> None:
+    if not change_id:
+        return
+
     def change(d):
-        d["skips"] = sorted((set(d.get("skips", [])) - set(shown)) | (set(shown) - kept))
-        d.setdefault("picks", {}).update(labels)
+        skips = set(d.get("skips", []))
+        (skips.discard if keep else skips.add)(change_id)
+        d["skips"] = sorted(skips)
     _update(change)
 
 
@@ -76,8 +79,8 @@ def page_body(review: dict | None) -> str:
         return "<h1>Review</h1><p class='muted'>Nothing to review until the first check has run.</p>"
     parts = [
         "<h1>Review</h1>",
-        "<p class='muted'>Nothing here has been written to any account. Untick a change to skip it; "
-        "your choices are kept for later checks.</p>",
+        "<p class='muted'>Nothing here has been written to any account. Everything you choose is saved as "
+        "you click it, and kept for later checks.</p>",
         f"<p>{_counts_line(review['counts'])}</p>",
     ]
     if review["suggestions"]:
@@ -93,6 +96,7 @@ def page_body(review: dict | None) -> str:
         "made on this page.</p><form method='post' action='review/reset'>"
         "<button class='secondary'>Forget my decisions</button></form></section>"
     )
+    parts.append(f"<div id='toast' class='toast' hidden></div><script>{_SCRIPT}</script>")
     return "".join(parts)
 
 
@@ -116,38 +120,45 @@ def _suggestions(items: list[dict]) -> str:
             + "</div>"
             for c in s["contacts"]
         )
+        pair = esc(s["id"])
         rows.append(
-            f"<div class='item'><p class='muted'>{esc(s['reason'])}</p><div class='pair'>{sides}</div>"
-            f"<form method='post' action='review/match' class='row'><input type='hidden' name='pair' value='{esc(s['id'])}'>"
-            "<button name='decision' value='same'>Same person</button>"
-            "<button class='secondary' name='decision' value='different'>Different people</button></form></div>"
+            f"<div class='item'><p class='muted'>{esc(s['reason'])}</p><div class='pair'>{sides}</div><div class='row'>"
+            f"<button type='button' class='match' data-pair='{pair}' data-decision='same'>Same person</button>"
+            f"<button type='button' class='match secondary' data-pair='{pair}' data-decision='different'>"
+            "Different people</button></div></div>"
         )
     return f"<section class='card'><h2>Possible matches ({len(items)})</h2>{''.join(rows)}</section>"
 
 
 def _conflicts(items: list[dict]) -> str:
-    rows = []
-    for c in items:
-        options = "".join(
-            f"<label class='option'><input type='radio' name='choice' value='{esc(o['key'])}'"
-            f"{' checked' if o['key'] == c['chosen'] else ''}>"
-            + (f"<img class='thumb' src='thumb/{esc(o['thumb'])}.jpg' alt=''>" if o.get("thumb") else f"<span>{esc(o['value'])}</span>")
-            + f"<span class='muted'>{esc(', '.join(o['accounts']))}</span></label>"
-            for o in c["options"]
-        )
-        rows.append(
-            f"<form method='post' action='review/pick' class='item'><b>{esc(c['person'])}</b> · {esc(c['field'])}"
-            f"<input type='hidden' name='conflict' value='{esc(c['id'])}'>{options}"
-            "<button class='secondary'>Use the selected value</button></form>"
-        )
-    return (f"<section class='card'><h2>Different values ({len(items)})</h2><p class='muted'>The selected value "
-            "is the one from the most recently changed contact, unless you pick another.</p>"
-            f"{''.join(rows)}</section>")
+    """Values still to decide on top. Until one is picked, nothing is selected and the value that will be used
+    is marked, so any click counts as a decision; decided ones sit in a collapsed section below."""
+    def row(i: int, c: dict) -> str:
+        options = []
+        for o in c["options"]:
+            picked = c["decided"] and o["key"] == c["chosen"]
+            default = "" if c["decided"] or o["key"] != c["chosen"] else (
+                "<span class='muted'>· used unless you pick another</span>")
+            shown = (f"<img class='thumb' src='thumb/{esc(o['thumb'])}.jpg' alt=''>" if o.get("thumb")
+                     else f"<span>{esc(o['value'])}</span>")
+            options.append(
+                f"<label class='option'><input type='radio' class='pick' name='choice-{i}' "
+                f"data-conflict='{esc(c['id'])}' value='{esc(o['key'])}'{' checked' if picked else ''}>"
+                f"{shown}<span class='muted'>{esc(', '.join(o['accounts']))}</span>{default}</label>"
+            )
+        return f"<div class='item'><b>{esc(c['person'])}</b> · {esc(c['field'])}{''.join(options)}</div>"
+
+    waiting = [row(i, c) for i, c in enumerate(items) if not c["decided"]]
+    decided = [row(i, c) for i, c in enumerate(items) if c["decided"]]
+    folded = (f"<details class='fold'><summary>Decided ({len(decided)})</summary>{''.join(decided)}</details>"
+              if decided else "")
+    body = "".join(waiting) or "<p class='muted'>Nothing left to decide.</p>"
+    return (f"<section class='card'><h2>Different values ({len(waiting)} to decide)</h2><p class='muted'>Pick "
+            "the value every account should have.</p>" f"{body}{folded}</section>")
 
 
 def _changes(people: list[dict], groups: list[dict]) -> str:
-    """Changes waiting first; unticked ones in a collapsed Ignored section at the bottom, in the same form
-    so ticking one there and saving brings it back."""
+    """Changes waiting first; unticked ones in a collapsed Ignored section, where ticking one brings it back."""
     def blocks(skipped: bool) -> list[str]:
         out = []
         for name, changes in [(p["name"], p["changes"]) for p in people] + [("Groups", groups)]:
@@ -159,27 +170,25 @@ def _changes(people: list[dict], groups: list[dict]) -> str:
 
     waiting, ignored = blocks(False), blocks(True)
     count = sum(c["skipped"] for p in people for c in p["changes"]) + sum(g["skipped"] for g in groups)
-    hidden = (f"<details class='ignored'><summary>Ignored ({count:,})</summary><p class='muted'>Tick a change "
-              f"and press Save choices to bring it back.</p>{''.join(ignored)}</details>" if ignored else "")
+    folded = (f"<details class='fold'><summary>Ignored ({count:,})</summary><p class='muted'>Tick a change "
+              f"to bring it back.</p>{''.join(ignored)}</details>" if ignored else "")
     body = "".join(waiting) or "<p class='muted'>Nothing waiting.</p>"
-    save = "<div class='row'><button>Save choices</button></div>"
-    return (f"<section class='card'><h2>Changes</h2><form method='post' action='review/changes'>{save}"
-            f"{body}{hidden}{save}</form></section>")
+    return f"<section class='card'><h2>Changes</h2>{body}{folded}</section>"
 
 
 def _checkbox(change: dict) -> str:
     thumb = f"<img class='thumb' src='thumb/{esc(change['thumb'])}.jpg' alt=''>" if change["thumb"] else ""
     details = (f"<details><summary class='muted'>Details</summary>{esc(change['details'])}</details>"
                if change["details"] else "")
-    box = (f"<input type='hidden' name='shown' value='{esc(change['id'])}'><label>"
-           f"<input type='checkbox' name='keep' value='{esc(change['id'])}'{'' if change['skipped'] else ' checked'}> ")
+    box = (f"<label><input type='checkbox' class='skip' data-id='{esc(change['id'])}'"
+           f"{'' if change['skipped'] else ' checked'}> ")
     if label := change.get("label"):
         # One line for every account that needs the label; the dropdown sits outside the <label> so
         # using it doesn't tick or untick the box.
         options = "".join(f"<option value='{esc(v)}'{' selected' if v == label['chosen'] else ''}>{esc(text)}</option>"
                           for v, text in label["options"])
-        return (f"<li>{box}{esc(change['text'])}:</label> <select name='label:{esc(change['id'])}'>{options}</select> "
-                f"<span class='muted'>now {esc(label['now'])}</span></li>")
+        return (f"<li>{box}{esc(change['text'])}:</label> <select class='label' data-id='{esc(change['id'])}'>"
+                f"{options}</select> <span class='muted'>now {esc(label['now'])}</span></li>")
     return (f"<li>{box}<span class='muted'>{esc(change['account'])}:</span> {esc(change['text'])}</label>"
             f"{thumb}{details}</li>")
 
@@ -192,3 +201,38 @@ def _duplicates(items: list[dict]) -> str:
 
 def _n(count: int, one: str, many: str = "") -> str:
     return f"{count:,} {one if count == 1 else (many or one + 's')}"
+
+
+# Saves each click straight away, then reloads at the same scroll position so handled items move out of the way.
+_SCRIPT = """
+async function save(url, data) {
+  sessionStorage.setItem('reviewScroll', String(window.scrollY));
+  let ok = false;
+  try { ok = (await fetch(url, {method: 'POST', body: new URLSearchParams(data)})).ok; } catch (err) {}
+  sessionStorage.setItem('reviewSaved', ok ? 'ok' : 'error');
+  location.reload();
+}
+document.addEventListener('change', e => {
+  const t = e.target;
+  if (t.matches('input.skip')) save('review/skip', {id: t.dataset.id, keep: t.checked ? '1' : ''});
+  else if (t.matches('select.label')) save('review/label', {id: t.dataset.id, label: t.value});
+  else if (t.matches('input.pick')) save('review/pick', {conflict: t.dataset.conflict, choice: t.value});
+});
+document.addEventListener('click', e => {
+  const b = e.target.closest('button.match');
+  if (b) { b.disabled = true; save('review/match', {pair: b.dataset.pair, decision: b.dataset.decision}); }
+});
+window.addEventListener('load', () => {
+  const y = sessionStorage.getItem('reviewScroll');
+  if (y !== null) { sessionStorage.removeItem('reviewScroll'); window.scrollTo(0, Number(y)); }
+  const saved = sessionStorage.getItem('reviewSaved');
+  if (saved) {
+    sessionStorage.removeItem('reviewSaved');
+    const toast = document.getElementById('toast');
+    toast.textContent = saved === 'ok' ? 'Saved' : "Couldn't save that. Try again.";
+    toast.classList.toggle('error', saved !== 'ok');
+    toast.hidden = false;
+    setTimeout(() => { toast.hidden = true; }, 2000);
+  }
+});
+"""
