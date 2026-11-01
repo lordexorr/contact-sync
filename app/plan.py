@@ -1,5 +1,6 @@
 """What a sync would change in each account, worked out from the latest check and your decisions."""
 from collections import Counter, defaultdict
+from datetime import datetime
 
 from . import match, photos
 from .model import Contact, Value, fold, label_text
@@ -226,8 +227,29 @@ def _details(merged: dict) -> str:
 
 
 def _summary(c: Contact, names: dict) -> dict:
-    lines = [c.company] + [f"{v.value} ({label_text(v.label)})" for v in c.phones + c.emails]
-    return {"account": names[c.account], "name": c.display(), "lines": [line for line in lines if line]}
+    """Everything one copy of a contact holds, for the possible-match cards."""
+    lines = [" — ".join(filter(None, (c.company, c.title)))]
+    lines += [f"{v.value} ({label_text(v.label)})" for v in c.phones + c.emails + c.addresses]
+    lines += [v.value for v in c.urls]
+    lines += [f"{v.value} ({label_text(v.label)})" for v in c.related]
+    if c.birthday:
+        lines.append("Birthday " + show("birthday", c.birthday))
+    if c.groups:
+        lines.append("Groups: " + ", ".join(c.groups))
+    if c.note.strip():
+        lines.append("Note: " + show("note", c.note.strip().splitlines()[0]))
+    lines = [line for line in lines if line]
+    thumb = c.photo if c.photo not in ("", "?") else ""
+    return {"account": names[c.account], "name": c.display(), "lines": lines or ([] if thumb else ["Name only"]),
+            "thumb": thumb, "updated": _when(c.updated)}
+
+
+def _when(stamp: str) -> str:
+    try:
+        changed = datetime.fromisoformat(stamp)
+    except ValueError:
+        return ""
+    return f"Last changed {MONTHS[changed.month - 1]} {changed.day}, {changed.year}"
 
 
 def _count(n: int, word: str) -> str:

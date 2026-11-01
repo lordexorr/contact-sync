@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.1
+
+- Contacts with the same full name in different accounts are matched automatically, unless something contradicts it: both copies have phone numbers or emails but none in common, or both have birthdays on different days. A detail only one copy has, such as a birthday, isn't a contradiction; it shows up as a change instead. The same name twice in one account is still asked about.
+- Possible-match cards show everything each copy holds: company and job title, phone numbers, emails, addresses, websites, related names, birthday, groups, the start of any note, the photo, and when it was last changed. A copy with nothing else says "Name only".
+
 ## 0.2.0
 
 Review page. Still read-only: nothing is written to any account.

@@ -108,7 +108,10 @@ def _suggestions(items: list[dict]) -> str:
     for s in items:
         sides = "".join(
             f"<div><div class='muted'>{esc(c['account'])}</div><b>{esc(c['name'])}</b>"
-            + "".join(f"<div>{esc(line)}</div>" for line in c["lines"]) + "</div>"
+            + (f"<img class='thumb' src='thumb/{esc(c['thumb'])}.jpg' alt=''>" if c["thumb"] else "")
+            + "".join(f"<div>{esc(line)}</div>" for line in c["lines"])
+            + (f"<div class='muted'>{esc(c['updated'])}</div>" if c["updated"] else "")
+            + "</div>"
             for c in s["contacts"]
         )
         rows.append(
