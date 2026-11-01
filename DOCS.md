@@ -18,7 +18,7 @@ Changing an Apple ID's main password revokes its app-specific passwords. If that
 
 1. In the [Google Cloud console](https://console.cloud.google.com), create a project named "Contact Sync".
 2. **APIs & Services → Library**: find **Google People API** and enable it.
-3. **APIs & Services → OAuth consent screen** (it opens *Google Auth Platform*) → **Get started**: app name "Contact Sync", your email for support and contact, audience **External**.
+3. **OAuth consent screen** (it opens *Google Auth Platform*) → **Get started**: app name "Contact Sync", your email for support and contact, audience **External**.
 4. **Audience → Publish app**. Publishing status must read **In production**. In *Testing*, Google signs Contact Sync out every 7 days.
 5. **Clients → Create client**: application type **Desktop app**, name "Contact Sync".
 6. Copy the **Client ID** and **Client secret** before closing the dialog. Google shows the secret only once.
