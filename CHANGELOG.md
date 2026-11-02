@@ -1,12 +1,17 @@
 # Changelog
 
+## 0.3.18
+
+- **US phone numbers** now use one format in every account: (555) 555-0123. Any US number written another way, such as with +1 or 1 in front or as ten digits with no spacing, shows up in the review as a change to that format. You don't have to pick a wording, you can untick the row, and nothing is written until you apply. Numbers with another country's code and short numbers stay as they are. An extension stays on the end, like (555) 555-0123 x12. Matching contacts isn't affected.
+- The Contact Sync pages fill the window instead of stopping at a fixed width, so the review's tables have room for every account.
+
 ## 0.3.17
 
 More of what's on each card now syncs, so every account can match more closely.
 
 - **Order of lists:** when accounts list a person's phone numbers, emails, addresses, websites, related names or dates in a different order, **Different values** asks which order to use, with nothing chosen for you. Until you choose, every account keeps its own order. Accounts that hold different values but don't disagree on order aren't asked about.
 - **Preferred values:** iCloud's preferred marker, which is always on the first value in a list, now goes on the first value in both iCloud accounts wherever either has one in a list of two or more. Putting a list in order also moves Google's primary marker to its first value.
-- **US country removed:** "US", "USA", "United States" and "United States of America" are removed from any address with something else on it, with no choice to make. Other countries stay. If an account adds one back, the next review shows it and applying removes it again.
+- **US country removed:** "US", "USA", "United States" and "United States of America" on any address with something else on it now show up in the review as a change to remove them. You don't have to pick a wording, you can untick the row, and nothing is written until you apply. Other countries stay. If an account adds one back, the next review shows it again.
 - **Dates:** anniversaries and other dates now sync as a list, with labels and deletions carried across like phone numbers. A date without a year takes the year from one that has it, and two different years are a choice.
 - **Details only Google can hold:** a new review section for other companies and locations, which iCloud has no room for. For each person, choose the main company, which every account will show, and choose **Move to Notes** or **Delete** for every other detail, with nothing chosen for you. Until everything about a person is chosen, those details stay as they are. An exact repeat of the main company goes without asking.
 - **Company cards:** iCloud's setting for showing a card as a company is now kept the same between iCloud accounts. A change in one account since the last apply carries over, including turning it off.

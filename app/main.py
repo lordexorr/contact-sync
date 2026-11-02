@@ -510,7 +510,7 @@ STYLE = """
 @media (prefers-color-scheme:dark){:root{--bg:#111;--card:#1c1c1c;--text:#e6e6e6;--muted:#9a9a9a;--line:#303030;--accent:#4fb3ef;--on-accent:#06202f;--ok:#66bb6a;--bad:#ef6b6b}}
 *{box-sizing:border-box}
 body{margin:0;padding:16px;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
-main{max-width:820px;margin:0 auto}
+main{margin:0 auto}
 h1{font-size:22px;margin:0 0 4px}
 h2{font-size:16px;margin:0 0 12px}
 h3{font-size:15px;margin:20px 0 8px}

@@ -116,6 +116,20 @@ def phone_key(value: str) -> str:
     return f"{digits}x{extension[1]}" if extension else digits
 
 
+def us_phone(value: str) -> str:
+    """A US number written as (555) 555-0123, however it came, with any extension after it as " x12". Anything
+    else stays as it is: another country's code, a short number, or a number with letters in it."""
+    extension = _EXTENSION.search(value)
+    main = value[:extension.start()] if extension else value
+    digits = re.sub(r"\D", "", main)
+    international = main.lstrip().startswith("+") and not digits.startswith("1")
+    ten = digits[1:] if len(digits) == 11 and digits[0] == "1" else digits
+    # In a US number, neither the area code nor the three digits after it can start with 0 or 1.
+    if international or re.search(r"[A-Za-z]", main) or not re.fullmatch(r"[2-9]\d{2}[2-9]\d{6}", ten):
+        return value
+    return f"({ten[:3]}) {ten[3:6]}-{ten[6:]}" + (f" x{extension[1]}" if extension else "")
+
+
 def email_key(value: str) -> str:
     return (value or "").strip().lower()
 

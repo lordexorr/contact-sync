@@ -6,7 +6,7 @@ from collections import Counter, defaultdict
 from datetime import datetime
 
 from . import match, photos
-from .model import Contact, Value, fold, label_text, without_us_country
+from .model import Contact, Value, fold, label_text, us_phone, without_us_country
 
 # Fields with one value per contact, and their names on the review page.
 SINGLE = {"name": "Name", "nickname": "Nickname", "company": "Company", "title": "Job title",
@@ -412,7 +412,8 @@ def _spellings(field: str, key: str, members: list[Contact]) -> dict:
         for x in getattr(c, field):
             if (x.key or fold(x.value)) == key:
                 parts = without_us_country([p.strip() for p in x.parts]) if field == "addresses" else []
-                value = _address_text(parts) if field == "addresses" else x.value.strip()
+                value = (_address_text(parts) if field == "addresses"
+                         else us_phone(x.value.strip()) if field == "phones" else x.value.strip())
                 option = options.setdefault(_exact(field, value, parts), {"value": value, "parts": parts, "contacts": []})
                 option["contacts"].append(c)
     if field == "dates":
