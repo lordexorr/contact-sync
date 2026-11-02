@@ -10,7 +10,7 @@ A Home Assistant add-on that keeps contacts in sync across any number of iCloud 
 |---|---|---|
 | 1. Connection check | Reads every account and shows contact counts and errors | Done (0.1.x) |
 | 2. Review page | Matches the same person across accounts and lists every change a sync would make; skip any change or pick between conflicting values | Done (0.2.x) |
-| 3. Apply | Backs up every account, then makes the reviewed changes; later reviews carry deletions across; a daily notification when changes are waiting | Done (0.3.x) |
+| 3. Apply | Backs up first, then makes the reviewed changes; later reviews carry deletions across; a daily notification when changes are waiting | Done (0.3.x) |
 | 4. Contacts | Search every contact, and edit, add or delete one for every account, through the same Apply page | Done (0.4.x) |
 
 ## Install

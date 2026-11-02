@@ -1,6 +1,6 @@
 # Contact Sync
 
-Keeps contacts in sync across any number of iCloud and Google accounts, as one combined list. It checks once a day and whenever you press **Check now**, and writes nothing to any account until you review the changes and apply them yourself. Every account is backed up before anything is written.
+Keeps contacts in sync across any number of iCloud and Google accounts, as one combined list. It checks once a day and whenever you press **Check now**, and writes nothing to any account until you review the changes and apply them yourself. Each apply makes a backup before anything is written.
 
 ## Setup
 
@@ -66,7 +66,7 @@ After each check, the **Review** section just below **Check now** counts what a 
   - Groups get a table of their own, with each account's member count. Google labels count as groups.
   - **My Contacts (Google):** Google Contacts lists, and counts, only the contacts in its *My Contacts* group. A contact can end up only in a label instead, which some other sync tools do: it's in the account and Contact Sync reads it, but Google Contacts leaves it out of its main list and its count. That's why Google can show fewer contacts than Contact Sync. This row lists any such contacts in each Google account, and applying adds them to My Contacts.
   - A person waiting on a possible match has a note under their table instead of an **Apply just** button.
-- **Duplicates within one account:** the same person more than once in one account, with every card shown side by side. **Merge into one** keeps the card with the most details, moves everything from the other cards onto it (including details Contact Sync doesn't otherwise use, such as dates, social profiles and messaging handles), and deletes the others when you apply. The person's table then has a **Duplicate cards** row, which you can untick. **Keep both** leaves them as they are. Either choice moves the card to a collapsed **Decided** section, where you can switch. Until you choose, applying leaves the extra cards alone. A same-name pair in one account first appears under **Possible matches**; answering **Same person** brings it here.
+- **Duplicates within one account:** the same person more than once in one account, with every card shown side by side. **Merge into one** keeps the card with the most details, moves everything from the other cards onto it (including details Contact Sync doesn't otherwise use, such as social profiles and messaging handles), and deletes the others when you apply. The person's table then has a **Duplicate cards** row, which you can untick. **Keep both** leaves them as they are. Either choice moves the card to a collapsed **Decided** section, where you can switch. Until you choose, applying leaves the extra cards alone. A same-name pair in one account first appears under **Possible matches**; answering **Same person** brings it here.
 - **Start over** forgets every match, choice and skip, once you confirm it.
 
 Contacts are matched automatically when they share a phone number or email address, their names agree and their birthdays don't differ, or when they have the same name in different accounts and nothing contradicts it. A first or last name on its own counts, and a card with no name goes by its company, so a business entered as a first name in one account and as the company in another still matches. Contacts that were one person at the last apply stay matched, even after a name or number changes in one account. Matching ignores capitals, punctuation and how a number or address is written, so those differences never split a person in two. Being matched only means the copies are the same person: every difference between them still appears under **Changes**. Everything you choose is saved the moment you click it, and kept for later checks until the accounts no longer differ on it, when it's forgotten so it can't undo a later edit.
@@ -112,7 +112,16 @@ Each folder holds:
 - For each account, a `.vcf` file of its contacts, which iCloud.com, Google Contacts and the Contacts apps can import, and a `.json` file with everything as the service sent it, including its groups.
 - Under `photos`, the full-size photo of every contact the apply changed or deleted, named after the person.
 
-Importing a `.vcf` file adds its contacts as new ones, next to any already there.
+### Undoing a change
+
+There's no restore button, so how you undo something depends on what happened. `What changed.txt` in each backup folder lists what that apply did, which shows you the right backup.
+
+- **A detail changed or removed:** press **Contacts**, open the person, press **Edit**, type back the old value from `What changed.txt`, and press **Apply now**.
+- **Someone deleted from every account:** the backup folder ending with their name has a `.vcf` file for each account. Import one into that account on iCloud.com or in Google Contacts, then press **Check now**, and the review offers to copy them to the other accounts. An iCloud file is best, because it holds the card exactly as Apple had it. A `.vcf` file doesn't hold groups, so add those back with **Edit**. If their photo doesn't come back, it's under `photos` in the same folder.
+- **Someone deleted while applying everyone:** that backup's `.vcf` file holds every contact. Open a copy in a text editor, keep only that person's card, from `BEGIN:VCARD` to `END:VCARD`, and import that.
+- **Contacts gone from one account:** if the other accounts still have them, you don't need a backup. Untick their **Contact** rows so they aren't deleted from the other accounts, then apply. They move to **Ignored**, where ticking them and applying again copies them back.
+
+Importing a whole `.vcf` file adds everyone as new contacts, next to any already there, so a whole backup can't be put back in one step. Only import a whole file into an empty account.
 
 ## Contacts
 
@@ -126,6 +135,16 @@ Nothing here writes to an account. Whatever you enter waits until you press **Ap
 - **Delete everywhere** deletes someone from every account, after you confirm it twice: once on their card, and again with **Apply now**.
 - A contact waiting on a possible match can't be edited or deleted until you answer it in the review, so a change can't land on the wrong person.
 - Photos aren't changed here. Change one in any account, such as on an iPhone, and the sync offers it to the others. Other companies and locations are decided under **Details only Google can hold**.
+
+## What isn't synced
+
+Contact Sync syncs names, nicknames, companies, job titles, birthdays, notes, photos, phone numbers, emails, addresses, websites, related names, dates and groups. Anything else stays in each account as it is, and updating a contact leaves it alone:
+
+- **Social profiles and messaging handles.** They aren't compared between accounts, though **Merge into one** keeps them when it combines duplicate cards.
+- **Details only one service has,** such as Google's interests and custom fields, or Apple's settings for gender and how a shared photo displays.
+- **Google's Other contacts,** the people Google saves by itself from your email. Contact Sync doesn't read them.
+- **Details from someone's own Google profile,** which Google can show on your contact. Only what's saved on the contact itself is read.
+- **Apple's hidden country code on an address.** Removing a US country takes it out of the address, but an iPhone's edit screen can still show the country. It doesn't show when you're just viewing the contact.
 
 ## Where things are kept
 
