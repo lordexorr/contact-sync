@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.14
+
+- **Open the review** is always on the Contact Sync page, even when nothing is waiting, so ignored rows and past answers can still be changed. With nothing waiting, the page says how many are ignored and decided.
+
 ## 0.3.13
 
 - Google contacts that are only in a label, not in *My Contacts*, are listed in a **My Contacts (Google)** row in the review's Groups table, and applying adds them. Google Contacts lists and counts only My Contacts, so those contacts were missing from its list and count, which is why it could show fewer contacts than Contact Sync.

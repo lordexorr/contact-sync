@@ -101,13 +101,21 @@ def _update(change) -> None:
 def summary_card(review: dict | None, last_apply: str = "") -> str:
     head = "<section class='card'><h2>Review</h2>"
     if review is None:
-        body = "<p class='muted'>Nothing to review until the first check has run.</p>"
-    elif not any(review["counts"].values()):
-        body = "<p class='ok'>Every account matches. There's nothing to sync.</p>"
+        return head + "<p class='muted'>Nothing to review until the first check has run.</p>" + last_apply + "</section>"
+    if any(review["counts"].values()):
+        body = f"<p>{_counts_line(review['counts'])}</p>"
     else:
-        body = (f"<p>{_counts_line(review['counts'])}</p>"
-                "<div class='row'><a class='button' href='review'>Open the review</a></div>")
-    return head + body + last_apply + "</section>"
+        # The review stays open even with nothing waiting, so ignored rows and past answers can be changed.
+        ignored = (sum(r["skipped"] for p in review["people"] for r in p["rows"])
+                   + sum(r["skipped"] for r in review["groups"]))
+        decided = (sum(c["decided"] for c in review["conflicts"]) + len(review["decided_matches"])
+                   + sum(bool(d["choice"]) for d in review["duplicates"]))
+        kept = " and ".join(filter(None, (f"{ignored:,} ignored" if ignored else "",
+                                          f"{decided:,} decided" if decided else "")))
+        body = ("<p class='ok'>Every account matches. There's nothing to sync.</p>"
+                + (f"<p class='muted'>{kept}, under Open the review.</p>" if kept else ""))
+    return (head + body + "<div class='row'><a class='button' href='review'>Open the review</a></div>"
+            + last_apply + "</section>")
 
 
 def page_body(review: dict | None) -> str:

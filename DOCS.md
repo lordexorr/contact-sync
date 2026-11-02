@@ -52,7 +52,7 @@ Then press **Check now**. Each account should show its contact count.
 
 ## Reviewing changes
 
-After each check, the **Review** section just below **Check now** counts what a sync would change. **Open the review** shows the details.
+After each check, the **Review** section just below **Check now** counts what a sync would change. **Open the review** shows the details. It's there even when nothing is waiting, with a count of what you've ignored and decided, so you can always go back and change those.
 
 - **Possible matches:** two contacts that might be the same person: the same name twice in one account, the same name with different phone numbers, emails or birthdays, or the same phone number or email address under different names. Each side shows everything that copy holds. Choose **Same person** or **Different people**, and the card moves to a collapsed **Decided** section, where you can change the answer.
 - **Different values:** a name, nickname, company, job title, birthday, note or photo that differs between accounts. Pick the value every account should have, and it moves to a collapsed **Decided** section. Until you pick, a value one account changed since the last sync is used over one left as it was; otherwise the value from the most recently changed contact. The one used is marked.
