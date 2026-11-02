@@ -80,6 +80,7 @@ def build(contacts: list[Contact], accounts: list[dict], decisions: dict, base: 
         if all(r in by_ref for r in pair.split("||"))
     ]
     to_group, from_group = defaultdict(list), defaultdict(list)  # (account, folded group) -> members to add, remove
+    unlisted = defaultdict(list)  # Google account -> people whose card there isn't in My Contacts
     totals = Counter()  # folded group name -> people in it after the sync
     for refs in clusters:
         copies = [by_ref[r] for r in refs]
@@ -93,6 +94,9 @@ def build(contacts: list[Contact], accounts: list[dict], decisions: dict, base: 
         person.ops["held"] = refs[0] in waiting
         if not person.ops["delete"]:
             person.memberships(have, dropped, to_group, from_group, totals)
+            for a, c in person.first.items():
+                if not c.listed:
+                    unlisted[a].append(person._member(a))
             for a, extras in person.extras.items():
                 dup_id = f"{key}|dup:{a}"
                 review["duplicates"].append({
@@ -107,6 +111,9 @@ def build(contacts: list[Contact], accounts: list[dict], decisions: dict, base: 
     review["people"].sort(key=lambda p: fold(p["name"]))
     review["groups"], review["sync"]["groups"] = _group_rows(
         names, have, dropped, spelling, members, to_group, from_group, totals, skips, last)
+    rows, ops = _listed_rows(names, unlisted, skips)
+    review["groups"] += rows
+    review["sync"]["groups"] += ops
 
     rows = [r for p in review["people"] for r in p["rows"]] + review["groups"]
     review["counts"] = {
@@ -668,6 +675,23 @@ def _group_rows(names, have, dropped, spelling, members, to_group, from_group, t
         if not row["skipped"]:
             ops += [{"account": a, "group": title, "fold": g, "create": g not in have[a], "delete": g in dropped,
                      "add": to_group.get((a, g), []), "remove": from_group.get((a, g), [])} for a in changing]
+    return rows, ops
+
+
+def _listed_rows(names, unlisted, skips):
+    """A row for each Google account with cards outside My Contacts. Google Contacts lists and counts only the
+    contacts in that group; a card that's only in a label is there, but missing from its list and count."""
+    rows, ops = [], []
+    for a, people in unlisted.items():
+        cells = {name: [{"text": "—"}] for name in names.values()}
+        cells[names[a]] = [{"text": f"{_count(len(people), 'contact')} only in labels, not in My Contacts"}]
+        after = {"kind": "text", "value": "In My Contacts, so Google Contacts lists them",
+                 "details": f"Adds to My Contacts in {names[a]}: {_names(people)}"}
+        row = _row(f"listed|{a}", "My Contacts (Google)", cells, [a], names, after, skips)
+        rows.append(row)
+        if not row["skipped"]:
+            ops.append({"account": a, "group": "My Contacts", "fold": "", "create": False, "delete": False,
+                        "add": people, "remove": [], "system": True})
     return rows, ops
 
 

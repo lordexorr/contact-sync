@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.13
+
+- Google contacts that are only in a label, not in *My Contacts*, are listed in a **My Contacts (Google)** row in the review's Groups table, and applying adds them. Google Contacts lists and counts only My Contacts, so those contacts were missing from its list and count, which is why it could show fewer contacts than Contact Sync.
+
 ## 0.3.12
 
 - The Google section is gone from the Configuration tab, which now holds only the daily check time and notification. The Google app is set under **Manage accounts** on the Contact Sync page. Updating from 0.3.10 or earlier, enter its client ID and secret there again.

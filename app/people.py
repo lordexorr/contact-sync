@@ -2,6 +2,8 @@
 from .model import LABEL_NAMES, Contact, Value, address_key, email_key, fold, label, phone_key, url_key
 
 NAME_KEYS = ("honorificPrefix", "givenName", "middleName", "familyName", "honorificSuffix")
+# Google Contacts lists, and counts, only the contacts in this group. Others are found only through a label.
+MY_CONTACTS = "contactGroups/myContacts"
 # Each list field's name in the People API.
 LISTS = {"phones": "phoneNumbers", "emails": "emailAddresses", "addresses": "addresses", "urls": "urls",
          "related": "relations"}
@@ -38,10 +40,9 @@ def read(account: str, person: dict, group_names: dict[str, str]) -> tuple[Conta
         c.note = notes[0].get("value", "")
     for field, name in LISTS.items():
         getattr(c, field).extend(_value(field, e) for e in _own(person.get(name)))
-    c.groups = sorted({
-        group_names[g] for m in person.get("memberships", [])
-        if (g := m.get("contactGroupMembership", {}).get("contactGroupResourceName")) in group_names
-    })
+    member_of = {m.get("contactGroupMembership", {}).get("contactGroupResourceName") for m in person.get("memberships", [])}
+    c.groups = sorted({group_names[g] for g in member_of if g in group_names})
+    c.listed = MY_CONTACTS in member_of
     for source in person.get("metadata", {}).get("sources", []):
         if source.get("type") == "CONTACT":
             c.updated = source.get("updateTime", "")

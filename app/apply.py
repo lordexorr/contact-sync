@@ -469,6 +469,9 @@ class _Writer:
             else:
                 conn.put(item["href"], vcard.edit_members(item["vcard"], add, remove), item["etag"])
             return
+        if op.get("system"):  # My Contacts, which Google has in every account
+            conn.modify_members(people.MY_CONTACTS, add, remove)
+            return
         group = next((g["resourceName"] for g in self.accounts.raw[account]["groups"]
                       if fold(g.get("name", "")) == op["fold"]), "")
         if op["delete"]:

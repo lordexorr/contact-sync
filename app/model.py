@@ -56,6 +56,7 @@ class Contact:
     photo: str = ""      # fingerprint of the photo; "" for none, "?" when it couldn't be read
     updated: str = ""    # when the account last changed the contact, if it says
     match_keys: list[str] = field(default_factory=list)  # emails and phones from a Google profile, for matching only
+    listed: bool = True  # Google only: in My Contacts, the group Google Contacts lists and counts
 
     @property
     def ref(self) -> str:
