@@ -181,8 +181,8 @@ class _Accounts:
                 conn = ICloudAddressBook(a["apple_id"], a["app_password"], self.raw[key]["book"])
             else:
                 a = next(a for a in check.google_accounts() if a["email"] == login)
-                conn = GoogleContacts(a["refresh_token"], self.options["google_client_id"],
-                                      self.options["google_client_secret"])
+                app = check.google_app()
+                conn = GoogleContacts(a["refresh_token"], app["client_id"], app["client_secret"])
             self._open[key] = self.stack.enter_context(conn)
         return self._open[key]
 

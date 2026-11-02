@@ -23,7 +23,7 @@ A Home Assistant add-on that keeps contacts in sync across any number of iCloud 
 - **iCloud:** reads and writes contacts over CardDAV, using an app-specific password for each Apple ID.
 - **Google:** reads and writes contacts through the Google People API, using an OAuth client you register in your own Google Cloud project. Each Google account signs in on Google's own page.
 - **Notification:** sends the daily message through a Home Assistant notify entity or service, using the add-on's Home Assistant API access.
-- Everything runs on your Home Assistant machine. Passwords and Google sign-ins stay in the add-on's configuration and private storage.
+- Everything runs on your Home Assistant machine. Passwords, the Google app's secret and Google sign-ins stay in the add-on's private storage.
 
 ## Changes
 

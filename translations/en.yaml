@@ -8,10 +8,10 @@ configuration:
       A notify entity or service, such as notify.mobile_app_my_phone or an email notifier, told after the
       daily check when changes are waiting or an account couldn't be read. Leave empty for none.
   google:
-    name: Google
+    name: Google (moved)
     description: >-
-      The app you registered in Google Cloud (setup step 2 on the Documentation tab), shared by every
-      Google account. Connect the Google accounts themselves on the Contact Sync page.
+      The Google app's client ID and secret are now set under Manage accounts on the Contact Sync page.
+      Any entered here were copied there the first time version 0.3.11 started.
     fields:
       client_id:
         name: Client ID

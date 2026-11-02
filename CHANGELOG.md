@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.11
+
+- The Google app's client ID and secret are set under **Manage accounts** on the Contact Sync page, with the Google accounts, instead of on the Configuration tab. They take effect straight away, with no restart. Once saved, the app folds away; changing it later means connecting each Google account again, and the page says so.
+- **Connect a Google account** is greyed out until the Google app is saved.
+- The client ID and secret already on the Configuration tab are copied to the page the first time this version starts. The Configuration tab now holds only the daily check time and notification; its Google section is marked "moved" and goes in the next version.
+
 ## 0.3.10
 
 - iCloud and Google accounts are together in a **Manage accounts** section on the Contact Sync page, folded away with a count of each. It opens by itself while there are no accounts and during a Google sign-in.

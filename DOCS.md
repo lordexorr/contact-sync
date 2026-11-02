@@ -26,11 +26,11 @@ Changing an Apple ID's main password revokes its app-specific passwords. If that
 6. **Clients → Create client**: application type **Desktop app**, name "Contact Sync".
 7. Copy the **Client ID** and **Client secret** before closing the dialog. Google shows the secret only once.
 
-### 3. Configure the add-on
+### 3. Start the add-on and save the Google app
 
-On the **Configuration** tab, open the **Google** section and enter the client ID and secret. Save, then restart the add-on. On the **Info** tab, turn on **Show in sidebar**.
+On the **Info** tab, turn on **Show in sidebar**, and start the add-on. Open **Contact Sync** in the sidebar, open **Manage accounts**, and under **Google accounts** enter the client ID and secret, then press **Save the Google app**. Once saved, it folds away; open it to change it, but changing the app means connecting each Google account again.
 
-Optionally, set **Daily notification** to a notify entity or service, such as `notify.mobile_app_my_phone` or an email notifier. After each daily check it sends a message when changes are waiting or an account couldn't be read, and nothing otherwise.
+On the **Configuration** tab you can change the daily check time, and optionally set **Daily notification** to a notify entity or service, such as `notify.mobile_app_my_phone` or an email notifier. After each daily check it sends a message when changes are waiting or an account couldn't be read, and nothing otherwise.
 
 ### 4. Add each iCloud account
 
@@ -109,8 +109,8 @@ Importing a `.vcf` file adds its contacts as new ones, next to any already there
 
 | What | Where |
 |---|---|
-| Google client ID and secret | The add-on's Configuration tab |
-| iCloud accounts and their app-specific passwords, Google sign-ins, last check results, your review decisions, the record of the last apply | The add-on's private storage |
+| Daily check time and notification | The add-on's Configuration tab |
+| iCloud accounts and their app-specific passwords, the Google app's client ID and secret, Google sign-ins, last check results, your review decisions, the record of the last apply | The add-on's private storage |
 | Raw contact snapshots from the latest check | `addon_configs/local_contact_sync/snapshots` on the Samba share |
 | Backups made before each apply | `addon_configs/local_contact_sync/backups` on the Samba share |
 

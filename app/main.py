@@ -46,7 +46,8 @@ class State:
 
     @property
     def google_configured(self) -> bool:
-        return bool(self.options["google_client_id"] and self.options["google_client_secret"])
+        app = check.google_app()
+        return bool(app["client_id"] and app["client_secret"])
 
 
 STATE = web.AppKey("state", State)
@@ -243,7 +244,8 @@ async def thumb(request: web.Request) -> web.StreamResponse:
 async def google_start(request: web.Request) -> web.Response:
     state = request.app[STATE]
     if state.google_configured:
-        state.google_sign_in = {**google.start_sign_in(state.options["google_client_id"]), "busy": False}
+        app = check.google_app()  # kept with the attempt, so it finishes with the app it started with
+        state.google_sign_in = {**google.start_sign_in(app["client_id"]), "app": app, "busy": False}
     raise go_to(request)
 
 
@@ -260,8 +262,7 @@ async def google_finish(request: web.Request) -> web.Response:
     attempt["busy"] = True
     try:
         account = await asyncio.to_thread(
-            google.finish_sign_in, pasted, attempt,
-            state.options["google_client_id"], state.options["google_client_secret"],
+            google.finish_sign_in, pasted, attempt, attempt["app"]["client_id"], attempt["app"]["client_secret"],
         )
         await asyncio.to_thread(check.save_google_account, account)
     except google.GoogleError as err:
@@ -297,6 +298,21 @@ async def icloud_add(request: web.Request) -> web.Response:
     else:
         await asyncio.to_thread(check.save_icloud_account, account)
         state.flash = ("ok", f"Added {account['label']}. Press Check now to read its contacts.")
+    raise go_to(request)
+
+
+async def google_app_save(request: web.Request) -> web.Response:
+    state = request.app[STATE]
+    form = await request.post()
+    client_id, client_secret = (str(form.get(k, "")).strip() for k in ("client_id", "client_secret"))
+    if not client_id or not client_secret:
+        state.flash = ("error", "Enter both the client ID and the client secret.")
+        raise go_to(request)
+    changed = check.google_app()["client_id"] not in ("", client_id)
+    await asyncio.to_thread(check.save_google_app, client_id, client_secret)
+    state.google_sign_in = None  # an open sign-in belongs to the app it started with
+    state.flash = ("ok", "Saved the Google app. Its sign-ins don't carry over, so connect each Google account "
+                         "again." if changed and check.google_accounts() else "Saved the Google app.")
     raise go_to(request)
 
 
@@ -392,8 +408,8 @@ def account_row(a: dict) -> str:
 
 
 def manage_card(state: State) -> str:
-    """The iCloud and Google account lists, folded away once there's an account. It opens by itself during a
-    Google sign-in, which needs its steps in view."""
+    """The iCloud accounts, and the Google app and accounts, folded away once there's an account. It opens by
+    itself during a Google sign-in, which needs its steps in view."""
     icloud, google_ = check.icloud_accounts(), check.google_accounts()
     shown = " open" if state.google_sign_in or not (icloud or google_) else ""
     counts = f"{len(icloud):,} iCloud · {len(google_):,} Google"
@@ -425,8 +441,27 @@ def icloud_section(accounts: list[dict]) -> str:
     )
 
 
+def google_app_form(app: dict) -> str:
+    """The client ID and secret of the app registered in Google Cloud: a form while it isn't set up, folded
+    away once it is."""
+    hint = " placeholder='Enter it again to save a change'" if app["client_secret"] else ""
+    form = (
+        "<form method='post' action='google/app' class='stack' onsubmit=\"this.querySelector('button').disabled=true\">"
+        f"<label>Client ID<input type='text' name='client_id' required autocomplete='off' value='{esc(app['client_id'])}'></label>"
+        f"<label>Client secret<input type='password' name='client_secret' required autocomplete='new-password'{hint}></label>"
+        "<div class='row'><button>Save the Google app</button></div></form>"
+    )
+    if not (app["client_id"] and app["client_secret"]):
+        return ("<p class='muted'>Google accounts sign in through an app you register in your own Google Cloud "
+                "project, once for every Google account. Setup step 2 on the add-on's Documentation tab shows how; "
+                f"then enter its client ID and secret here.</p>{form}")
+    return ("<details class='fold'><summary>Google app <span class='muted'>· set up, client ID ending "
+            f"{esc(app['client_id'].split('.')[0][-6:])}</span></summary><p class='muted'>Changing the app means "
+            f"connecting each Google account again, because their sign-ins belong to the app.</p>{form}</details>")
+
+
 def google_section(state: State, accounts: list[dict]) -> str:
-    # Connected accounts stay listed even without a client ID and secret, so they can still be disconnected.
+    # Connected accounts stay listed even without the Google app, so they can still be disconnected.
     connected = "".join(
         f"<li class='row'><span>{esc(a['email'])}</span><form method='post' action='google/remove'>"
         f"<input type='hidden' name='email' value='{esc(a['email'])}'>"
@@ -434,10 +469,8 @@ def google_section(state: State, accounts: list[dict]) -> str:
         for a in accounts
     ) or "<li class='muted'>None connected yet.</li>"
     if not state.google_configured:
-        action = (
-            "<p class='muted'>Add the client ID and secret in the Google section of the add-on's "
-            "Configuration tab, then restart the add-on.</p>"
-        )
+        action = ("<div class='row'><button disabled>Connect a Google account</button>"
+                  "<span class='muted'>Save the Google app first.</span></div>")
     elif state.google_sign_in:
         action = (
             "<ol>"
@@ -454,7 +487,7 @@ def google_section(state: State, accounts: list[dict]) -> str:
         )
     else:
         action = "<form method='post' action='google/start'><button>Connect a Google account</button></form>"
-    return f"<h3>Google accounts</h3><ul class='plain'>{connected}</ul>{action}"
+    return f"<h3>Google accounts</h3>{google_app_form(check.google_app())}<ul class='plain'>{connected}</ul>{action}"
 
 
 def fmt_time(dt: datetime) -> str:
@@ -535,7 +568,9 @@ label.value{display:block}
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     app = web.Application(middlewares=[ingress_only])
-    app[STATE] = State(load_options(), home_tz())
+    options = load_options()
+    check.move_google_app(options)  # earlier versions kept the Google app on the Configuration tab
+    app[STATE] = State(options, home_tz())
     app.add_routes([
         web.get("/", index),
         web.post("/check", check_now),
@@ -550,6 +585,7 @@ def main() -> None:
         web.post("/apply", apply_start),
         web.get("/result", result_page),
         web.get(r"/thumb/{name:[0-9a-f]+\.jpg}", thumb),
+        web.post("/google/app", google_app_save),
         web.post("/icloud/add", icloud_add),
         web.post("/icloud/remove", icloud_remove),
         web.post("/google/start", google_start),

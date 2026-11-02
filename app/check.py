@@ -20,6 +20,7 @@ STATUS_FILE = PRIVATE_DIR / "status.json"
 RECORDS_FILE = PRIVATE_DIR / "records.json"
 GOOGLE_ACCOUNTS_FILE = PRIVATE_DIR / "google_accounts.json"
 ICLOUD_ACCOUNTS_FILE = PRIVATE_DIR / "icloud_accounts.json"
+GOOGLE_APP_FILE = PRIVATE_DIR / "google_app.json"
 SNAPSHOT_DIR = SHARED_DIR / "snapshots"
 
 check_lock = threading.Lock()  # one check, or one apply, at a time
@@ -57,6 +58,30 @@ def remove_google_account(email: str) -> None:
     for account in accounts:
         if account["email"] == email:
             revoke(account["refresh_token"])
+
+
+def google_app() -> dict:
+    """The app registered in Google Cloud that every Google account signs in through:
+    {"client_id", "client_secret"}, both "" until it's set up."""
+    return {"client_id": "", "client_secret": "", **storage.read_json(GOOGLE_APP_FILE, {})}
+
+
+def save_google_app(client_id: str, client_secret: str) -> None:
+    with _state_lock:
+        storage.write_json(GOOGLE_APP_FILE, {"client_id": client_id, "client_secret": client_secret})
+
+
+def move_google_app(options: dict) -> None:
+    """Once only: take over the client ID and secret set on the Configuration tab by earlier versions."""
+    with _state_lock:
+        if not GOOGLE_APP_FILE.exists() and options["google_client_id"] and options["google_client_secret"]:
+            storage.write_json(GOOGLE_APP_FILE, {"client_id": options["google_client_id"],
+                                                 "client_secret": options["google_client_secret"]})
+
+
+def _google(refresh_token: str) -> GoogleContacts:
+    app = google_app()
+    return GoogleContacts(refresh_token, app["client_id"], app["client_secret"])
 
 
 def icloud_accounts() -> list[dict]:
@@ -199,7 +224,7 @@ def _read_some_icloud(account: dict, hrefs: list[str], new_groups: dict, run: _R
 
 def _read_some_google(account: dict, resources: list[str], options: dict, run: _Run) -> None:
     key = f"google:{account['email']}"
-    with GoogleContacts(account["refresh_token"], options["google_client_id"], options["google_client_secret"]) as api:
+    with _google(account["refresh_token"]) as api:
         persons = [p for p in (api.fetch_contact(rn) for rn in resources) if p]
         groups = [g for g in api.fetch_groups() if g.get("groupType") == "USER_CONTACT_GROUP"]
         group_names = {g["resourceName"]: g["name"] for g in groups}
@@ -291,9 +316,7 @@ def _check_google(account: dict, options: dict, run: _Run) -> dict:
     row = _result("Google", account["email"], account["email"])
     key = f"google:{account['email']}"
     try:
-        with GoogleContacts(
-            account["refresh_token"], options["google_client_id"], options["google_client_secret"]
-        ) as api:
+        with _google(account["refresh_token"]) as api:
             persons = api.fetch_contacts()
             groups = [g for g in api.fetch_groups() if g.get("groupType") == "USER_CONTACT_GROUP"]
             group_names = {g["resourceName"]: g["name"] for g in groups}
