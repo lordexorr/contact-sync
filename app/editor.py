@@ -17,6 +17,8 @@ PART_LABELS = {"street": "Street", "city": "City", "region": "State", "postcode"
 LIST_TITLES = {"phones": "Phone numbers", "emails": "Email addresses", "addresses": "Addresses", "urls": "Websites",
                "related": "Related names", "dates": "Dates"}
 DATE_HINT = "8/10/2002, or 8/10 if the year isn't known"
+# The label a new row starts on. Related names start with none, since there's no likely one.
+NEW_ROW_LABELS = {"phones": "mobile", "emails": "home", "addresses": "home", "urls": "homepage", "dates": "anniversary"}
 
 
 def _link(key: str) -> str:
@@ -30,7 +32,8 @@ def contacts_body(rv: dict | None) -> str:
         return "<h1>Contacts</h1><p class='muted'>Nothing to show until the first check has run.</p>"
     rows = "".join(_list_row(d) for d in rv["directory"])
     return (
-        "<h1>Contacts</h1><div class='row'><a class='button' href='contact/new'>New contact</a></div>"
+        f"<h1>Contacts</h1>{_waiting(rv)}<div class='row'><a class='button' href='contact/new'>New contact</a></div>"
+        "<p class='muted'>What the accounts hold today. A value only some accounts have says which.</p>"
         "<p><input id='find' type='search' autocomplete='off' placeholder='Search by name, company, phone or email'></p>"
         f"<p class='muted'><span id='shown'>{len(rv['directory']):,}</span> contacts</p>"
         "<div class='scroll'><table class='people'><thead><tr><th>Name</th><th>Company</th><th>Phone</th><th>Email</th>"
@@ -38,15 +41,34 @@ def contacts_body(rv: dict | None) -> str:
     )
 
 
+def _waiting(rv: dict) -> str:
+    """Everything entered here and not applied yet, on top, so nothing's left forgotten."""
+    words = {"edit": "Edit", "delete": "Delete", "new": "New contact"}
+    items = "".join(
+        f"<li class='row'><span><a href='{_link(d['key'])}'>{esc(d['name'])}</a> <span class='muted'>· {words[d['pending']]}"
+        f"</span></span><span class='row'><a class='button' href='apply?person={esc(quote(d['key'], safe=''))}'>Apply…</a>"
+        f"{review.pending_buttons(rv, d['key'])}</span></li>" for d in rv["directory"] if d["pending"])
+    if not items:
+        return ""
+    return ("<section class='card'><h2>Waiting to be applied</h2><p class='muted'>Entered here, and not written to any "
+            f"account yet.</p><ul class='plain'>{items}</ul></section>")
+
+
+def _lines(items: list[dict]) -> str:
+    """Values, one to a line, each with the accounts that have it if that isn't all of them."""
+    return "".join(f"<div>{esc(i['text'])}" + (f" <span class='muted where'>{esc(i['where'])}</span>" if i["where"] else "")
+                   + "</div>" for i in items)
+
+
 def _list_row(d: dict) -> str:
-    digits = [re.sub(r"\D", "", p) for p in d["phones"]]
-    search = " ".join([d["name"], d["company"], d["nickname"], *d["phones"], *digits, *d["emails"]]).lower()
+    texts = [i["text"] for i in d["phones"]]
+    digits = [re.sub(r"\D", "", p) for p in texts]
+    search = " ".join([d["name"], d["nickname"], *[i["text"] for i in d["company"]], *texts, *digits, *d["phone_keys"],
+                       *[i["text"] for i in d["emails"]]]).lower()
     status = ("Waiting to be applied" if d["pending"] in ("edit", "new") else "Waiting to be deleted" if d["pending"]
               else "Possible match to answer" if d["held"] else "")
-    name = (f"<a href='{_link(d['key'])}'>{esc(d['name'])}</a>" if d["pending"] != "new"
-            else f"<a href='apply?person={esc(quote(d['key'], safe=''))}'>{esc(d['name'])}</a>")
-    return (f"<tr data-search='{esc(search)}'><td>{name}</td><td>{esc(d['company'])}</td>"
-            f"<td>{esc(d['phones'][0]) if d['phones'] else ''}</td><td>{esc(d['emails'][0]) if d['emails'] else ''}</td>"
+    return (f"<tr data-search='{esc(search)}'><td><a href='{_link(d['key'])}'>{esc(d['name'])}</a></td>"
+            f"<td>{_lines(d['company'])}</td><td>{_lines(d['phones'])}</td><td>{_lines(d['emails'])}</td>"
             f"<td class='muted'>{status}</td></tr>")
 
 
@@ -57,26 +79,36 @@ def contact_body(rv: dict | None, key: str) -> str:
     if view is None:
         return "<h1>Contact</h1><p class='muted'>This contact is no longer here.</p>"
     photo = f"<img class='thumb' src='thumb/{esc(view['photo'])}.jpg' alt=''>" if view["photo"] else ""
-    facts = [("Nickname", view["nickname"]), ("Company", view["company"]), ("Job title", view["title"]),
-             ("Birthday", plan.show("birthday", view["birthday"]))]
-    rows = "".join(f"<tr><th>{title}</th><td>{esc(value)}</td></tr>" for title, value in facts if value)
+    total = len(view["in"])
+
+    def value_row(title: str, item: dict, css: str = "") -> str:
+        where = (f" <span class='muted where'>{esc(', '.join(item['accounts']))}</span>"
+                 if len(item["accounts"]) != total else "")
+        return f"<tr><th>{title}</th><td{css}>{esc(item['text'])}{where}</td></tr>"
+
+    single, lists = view["now"]["single"], view["now"]["lists"]
+    names = single["name"] if len(single["name"]) > 1 else []  # a name every account agrees on is the heading
+    rows = "".join(value_row(title, item) for title, items in (
+        ("Name", names), ("Nickname", single["nickname"]), ("Company", single["company"]), ("Job title", single["title"]),
+        ("Birthday", single["birthday"])) for item in items)
     for field, title in LIST_TITLES.items():
-        for r in view["lists"][field]:
-            shown = plan.show("dates", r["value"]) if field == "dates" else r["value"]
-            rows += f"<tr><th>{esc(label_text(r['label']))} · {title}</th><td>{esc(shown)}</td></tr>"
-    if view["note"]:
-        rows += f"<tr><th>Notes</th><td class='note-text'>{esc(view['note'])}</td></tr>"
+        rows += "".join(value_row(f"{esc(label_text(i['label']))} · {title}", i) for i in lists[field])
+    rows += "".join(value_row("Notes", i, " class='note-text'") for i in single["note"])
     if view["groups"]:
         rows += f"<tr><th>Groups</th><td>{esc(', '.join(view['groups']))}</td></tr>"
     others = [e["text"] for e in view["extras"] if not e["current"]]
     if others:
         rows += ("<tr><th>Only in Google</th><td>" + esc("; ".join(others))
                  + " <a href='review'>Decide in the review</a></td></tr>")
-    where = f"In {', '.join(view['in'])}." + (f" Not in {', '.join(view['missing'])}." if view["missing"] else "")
-    return (f"<p><a href='contacts'>← Contacts</a></p><h1>{esc(view['display'])}{photo}</h1>"
-            "<p class='muted'>What every account will have after the next apply, including anything waiting.</p>"
+    if view.get("new"):
+        intro, where = "Not in any account yet. This is what you entered.", ""
+    else:
+        intro = "What the accounts hold today."
+        where = f"In {', '.join(view['in'])}." + (f" Not in {', '.join(view['missing'])}." if view["missing"] else "")
+    changes = "" if view.get("new") else review.person_changes(rv, key)
+    return (f"<p><a href='contacts'>← Contacts</a></p><h1>{esc(view['display'])}{photo}</h1><p class='muted'>{intro}</p>"
             f"<div class='scroll'><table class='facts'><tbody>{rows}</tbody></table></div>"
-            f"<p class='muted'>{esc(where)}</p>{_actions(rv, key, view)}")
+            + (f"<p class='muted'>{esc(where)}</p>" if where else "") + changes + _actions(rv, key, view))
 
 
 def _actions(rv: dict, key: str, view: dict) -> str:
@@ -85,11 +117,16 @@ def _actions(rv: dict, key: str, view: dict) -> str:
                 "so a change can't land on the wrong person.</p>")
     pending = rv["pending"].get(key)
     apply_link = f"<a class='button' href='apply?person={esc(quote(key, safe=''))}'>Apply…</a>"
+    buttons = f"<div class='row'>{apply_link}{review.pending_buttons(rv, key)}</div>"
     if pending == "delete":
-        return f"<p>Waiting to be deleted from every account.</p><div class='row'>{apply_link}{review.discard_button(rv, key)}</div>"
-    waiting = f"<p>Your edit is waiting to be applied.</p><div class='row'>{apply_link}{review.discard_button(rv, key)}</div>" if pending else ""
-    return (f"{waiting}<div class='row'><a class='button{' secondary' if pending else ''}' href='contact/edit?person="
-            f"{esc(quote(key, safe=''))}'>Edit</a></div><details class='fold'><summary>Delete everywhere…</summary>"
+        return f"<p>Waiting to be deleted from every account.</p>{buttons}"
+    if pending == "new":
+        return f"<p>This new contact is waiting to be applied.</p>{buttons}"
+    if pending:
+        waiting = f"<p>Your edit is waiting to be applied.</p>{buttons}"
+    else:
+        waiting = (f"<div class='row'><a class='button' href='contact/edit?person={esc(quote(key, safe=''))}'>Edit</a></div>")
+    return (f"{waiting}<details class='fold'><summary>Delete everywhere…</summary>"
             f"<p>{esc(view['display'])} would be deleted from {esc(', '.join(view['in']))}. The next page shows the change "
             "before anything is deleted, and a backup is saved first.</p><form method='post' action='contact/delete'>"
             f"<input type='hidden' name='person' value='{esc(key)}'><button class='secondary'>Delete everywhere…</button>"
@@ -108,21 +145,14 @@ def form_body(rv: dict | None, key: str = "", entered: dict | None = None, error
         return f"<h1>{esc(view['display'])}</h1>{_actions(rv, key, view)}"
     values = entered or view or _empty()
     back = _link(key) if key else "contacts"
-    title = f"Edit {esc(view['display'])}" if view else "New contact"
-    faults = "".join(f"<div class='flash error'>{esc(e)}</div>" for e in errors)
-    warned = ""
-    if similar:
-        items = "".join(f"<li><a href='{_link(s['key'])}' target='_blank' rel='noopener'>{esc(s['name'])}</a>: {esc(s['why'])}</li>"
-                        for s in similar)
-        warned = (f"<div class='flash error'>This may already be in your contacts:<ul>{items}</ul>"
-                  "To add it anyway, press <b>Add anyway</b>.</div><input type='hidden' name='confirmed' value='1'>")
-    names = "".join(_field(NAME_LABELS[f], f, values["name_parts"][i]) for i, f in enumerate(NAME_FIELDS))
+    title = "New contact" if not view or view.get("new") else f"Edit {esc(view['display'])}"
+    faults = "".join(f"<div class='flash error'>{esc(e)}</div>" for e in errors) + _similar_warning(rv, similar)
+    warned = "<input type='hidden' name='confirmed' value='1'>" if similar else ""
+    names ="".join(_field(NAME_LABELS[f], f, values["name_parts"][i]) for i, f in enumerate(NAME_FIELDS))
     singles = (_field("Nickname", "nickname", values["nickname"]) + _field("Company", "company", values["company"])
                + _field("Job title", "title", values["title"])
                + _field("Birthday", "birthday", _date_for_form(values["birthday"]), DATE_HINT))
     lists = "".join(_list_section(field, title_, values["lists"][field]) for field, title_ in LIST_TITLES.items())
-    choices = "".join(f"<datalist id='labels-{field}'>" + "".join(
-        f"<option value='{esc(label_text(o))}'>" for o in plan.LABEL_CHOICES[field]) + "</datalist>" for field in LIST_TITLES)
     save = "Add anyway" if similar else "Save…"
     return (
         f"<p><a href='{back}'>← Back</a></p><h1>{title}</h1>{faults}"
@@ -134,9 +164,25 @@ def form_body(rv: dict | None, key: str = "", entered: dict | None = None, error
         f"<section class='card'><h2>Phone numbers, addresses and more</h2><p class='muted'>The first in each list is "
         f"the main one. Use the arrows to change the order.</p>{lists}</section>"
         "<section class='card'><h2>Notes</h2><textarea name='note' rows='5'>"
-        f"{esc(values['note'])}</textarea></section>{choices}"
+        f"{esc(values['note'])}</textarea></section>"
         f"<div class='row'><button>{save}</button><a href='{back}'>Cancel</a></div></form><script>{_FORM_SCRIPT}</script>"
     )
+
+
+def _similar_warning(rv: dict, similar: tuple) -> str:
+    """Who this may duplicate. A contact you entered earlier and haven't applied gets a way to change or discard it,
+    since it isn't in any account yet."""
+    if not similar:
+        return ""
+    items = ""
+    for s in similar:
+        if s["unapplied"]:
+            items += (f"<li class='row'><span>{esc(s['name'])}: you entered this contact earlier and haven't applied it, "
+                      f"with {esc(s['why'])}.</span>{review.pending_buttons(rv, s['key'])}</li>")
+        else:
+            items += f"<li><a href='{_link(s['key'])}' target='_blank' rel='noopener'>{esc(s['name'])}</a>: {esc(s['why'])}</li>"
+    return ("<div class='flash error'>This may already be here:<ul class='plain'>" f"{items}</ul>"
+            "To add this one as well, press <b>Add anyway</b>.</div>")
 
 
 def _empty() -> dict:
@@ -151,17 +197,28 @@ def _field(title: str, name: str, value: str, hint: str = "") -> str:
 
 def _list_section(field: str, title: str, rows: list[dict]) -> str:
     noun = plan.MULTI[field]
-    blank = {"value": "", "label": "", "parts": []}
-    body = "".join(_list_row_input(field, r) for r in rows)
+    blank = {"value": "", "label": NEW_ROW_LABELS.get(field, ""), "parts": []}
+    body ="".join(_list_row_input(field, r) for r in rows)
     return (f"<h3>{title}</h3><div class='edit-list' data-field='{field}'>{body}</div>"
             f"<template id='row-{field}'>{_list_row_input(field, blank)}</template>"
             f"<div class='row'><button type='button' class='secondary add-row' data-field='{field}'>Add {'an' if noun[0] in 'aeiou' else 'a'} {noun}</button></div>")
 
 
+def _label_box(field: str, tag: str) -> str:
+    """The label dropdown: the labels iCloud and Google both have, this value's own if it's another, and Custom…"""
+    current = label_text(tag) if tag else ""
+    choices = [label_text(o) for o in plan.LABEL_CHOICES[field]]
+    if current and current.lower() not in {c.lower() for c in choices}:
+        choices.append(current)
+    options = "<option value=''>no label</option>" + "".join(
+        f"<option value='{esc(c)}'{' selected' if c.lower() == current.lower() else ''}>{esc(c)}</option>" for c in choices)
+    return (f"<span class='label-choice'><select class='label-pick' name='{field}_label' autocomplete='off'>{options}"
+            f"<option value='{review.CUSTOM}'>Custom…</option></select><input type='text' class='label-custom' "
+            f"name='{field}_label_custom' autocomplete='off' maxlength='40' placeholder='Label' hidden></span>")
+
+
 def _list_row_input(field: str, r: dict) -> str:
-    tag = label_text(r["label"]) if r["label"] else ""
-    label_box = (f"<input type='text' class='label-box' name='{field}_label' list='labels-{field}' autocomplete='off' "
-                 f"placeholder='Label' value='{esc(tag)}'>")
+    label_box = _label_box(field, r["label"])
     if field == "addresses":
         parts = (list(r["parts"]) + [""] * 5)[:5]
         boxes = (f"<textarea name='addresses_street' rows='2' placeholder='{PART_LABELS['street']}'>{esc(parts[0])}</textarea>"
@@ -190,7 +247,9 @@ def read_form(form) -> tuple[dict, list[str]]:
     entered["lists"] = {}
     for field in LIST_TITLES:
         rows, seen = [], set()
-        labels = form.getall(f"{field}_label", [])
+        custom = form.getall(f"{field}_label_custom", [])
+        labels = [str(custom[i]) if tag == review.CUSTOM and i < len(custom) else "" if tag == review.CUSTOM else tag
+                  for i, tag in enumerate(form.getall(f"{field}_label", []))]
         if field == "addresses":
             columns = [form.getall(f"addresses_{f}", []) for f in PART_FIELDS]
             typed = [("", str(labels[i]) if i < len(labels) else "", [str(c[i]) if i < len(c) else "" for c in columns])
@@ -251,17 +310,21 @@ def save(options: dict, key: str, form) -> dict:
         return {"entered": entered, "errors": ["This contact is no longer here."], "similar": []}
     if view and view["held"]:
         return {"entered": entered, "errors": ["Answer this contact's possible match in the review first."], "similar": []}
-    if view and view["baseline"]["name"] and not any(entered["name_parts"]):
+    is_new = bool(view and view.get("new"))
+    if view and not is_new and view["baseline"]["name"] and not any(entered["name_parts"]):
         errors.append("A name can be changed, but not removed.")
     if errors:
         return {"entered": entered, "errors": errors, "similar": []}
-    if view:
+    if view and not is_new:
         edit = plan.edit_from(view["baseline"], entered)
         review.save_edit(key, edit)
         return {"key": key, "unchanged": not (edit["set"] or edit["lists"])}
-    found = plan.similar(rv, entered)
+    found = plan.similar(rv, entered, key)
     if found and not form.get("confirmed"):
         return {"entered": entered, "errors": [], "similar": found}
+    if is_new:
+        review.update_new_person(key, plan.new_person(entered))
+        return {"key": key, "unchanged": False}
     return {"key": review.add_new_person(plan.new_person(entered)), "unchanged": False}
 
 
@@ -285,6 +348,12 @@ box.focus();
 """
 
 _FORM_SCRIPT = """
+document.addEventListener('change', e => {
+  if (!e.target.matches('select.label-pick')) return;
+  const box = e.target.nextElementSibling;
+  box.hidden = e.target.value !== '__custom__';
+  if (!box.hidden) box.focus();
+});
 document.addEventListener('click', e => {
   const add = e.target.closest('.add-row');
   if (add) {

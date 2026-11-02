@@ -632,7 +632,9 @@ table.facts th{font-weight:normal;color:var(--muted);width:220px;font-size:14px}
 .edit-grid label{display:block;font-size:14px}
 .edit-grid input{margin-top:4px}
 .edit-row{display:flex;flex-wrap:wrap;align-items:flex-start;gap:6px;padding:6px 0;border-bottom:1px solid var(--line)}
-form.edit .edit-row input.label-box{width:150px;flex:none}
+.label-choice{display:flex;flex-direction:column;gap:4px;flex:none;width:150px}
+form.edit .label-choice input.label-custom[hidden]{display:none}
+.where{font-size:13px}
 form.edit .edit-row input.value-box{width:auto;flex:1 1 240px}
 .address-boxes{flex:1 1 320px;display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:6px}
 .address-boxes textarea{grid-column:1/-1}

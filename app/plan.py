@@ -25,7 +25,8 @@ LABEL_CHOICES = {
     "emails": ["home", "work", "other"],
     "addresses": ["home", "work", "other"],
     "urls": ["homepage", "home", "work", "other"],
-    "related": [],
+    "related": ["spouse", "partner", "child", "mother", "father", "parent", "brother", "sister", "friend", "assistant",
+                "manager"],
     "dates": ["anniversary", "other"],
 }
 _DELETED = {"text": "Deleted since the last sync", "state": "note"}
@@ -109,7 +110,7 @@ def build(contacts: list[Contact], accounts: list[dict], decisions: dict, base: 
             review["edit_settled"][key] = person.settled(edits[key])
         review["views"][key] = {**merged["view"], "baseline": merged["baseline"], "groups": merged["groups"],
                                 "photo": merged["photo"], "extras": merged["extras"]["entries"],
-                                "display": merged["display"], "held": person.ops["held"],
+                                "display": merged["display"], "held": person.ops["held"], "now": person.held_now(),
                                 "in": [names[a] for a in person.first], "missing": [names[a] for a in person.missing]}
         review["directory"].append(_directory_entry(key, review["views"][key], review["pending"].get(key, "")))
         if not person.ops["delete"]:
@@ -238,8 +239,9 @@ def new_person(entered: dict) -> dict:
     return {"name": name, "contact": contact}
 
 
-def similar(review: dict, entered: dict) -> list[dict]:
-    """People who may be the one just entered: the same name, phone number or email address."""
+def similar(review: dict, entered: dict, skip: str = "") -> list[dict]:
+    """People who may be the one just entered, leaving out skip: the same name, phone number or email address. A
+    contact entered earlier and not yet applied counts, and "unapplied" says so."""
     name = fold(f"{entered['name_parts'][1]} {entered['name_parts'][3]}") or fold(entered["company"])
     phones = {r["key"] for r in entered["lists"]["phones"]}
     emails = {r["key"] for r in entered["lists"]["emails"]}
@@ -248,8 +250,8 @@ def similar(review: dict, entered: dict) -> list[dict]:
         why = [word for word, same in (("the same name", d["name_key"] == name),
                                        ("the same phone number", phones & set(d["phone_keys"])),
                                        ("the same email address", emails & set(d["email_keys"]))) if same]
-        if why:
-            found.append({"key": d["key"], "name": d["name"], "why": " and ".join(why)})
+        if why and d["key"] != skip:
+            found.append({"key": d["key"], "name": d["name"], "why": " and ".join(why), "unapplied": d["pending"] == "new"})
     return found
 
 
@@ -285,6 +287,11 @@ def show(field: str, value: str) -> str:
         value = " ".join(value.split())
         return value if len(value) <= 80 else value[:79] + "…"
     return value
+
+
+def show_all(field: str, value: str) -> str:
+    """A field's value in full: the same as show, except that notes aren't shortened."""
+    return value if field == "note" else show(field, value)
 
 
 def _column_names(accounts: list[dict]) -> dict[str, str]:
@@ -491,10 +498,18 @@ def _view(merged: dict) -> dict:
 
 
 def _directory_entry(key: str, view: dict, pending: str) -> dict:
-    """One line of the Contacts list, and what's needed to search it and spot a duplicate."""
-    lists = view["lists"]
-    return {"key": key, "name": view["display"], "company": view["company"], "nickname": view["nickname"],
-            "phones": [r["value"] for r in lists["phones"]], "emails": [r["value"] for r in lists["emails"]],
+    """One line of the Contacts list, showing what the accounts hold today, and what's needed to search it and spot a
+    duplicate. A value only some accounts hold says which."""
+    lists, now, total = view["lists"], view["now"], len(view["in"])
+
+    def lines(items: list[dict]) -> list[dict]:
+        accounts = {}
+        for item in items:
+            accounts.setdefault(item["text"], set()).update(item["accounts"])
+        return [{"text": text, "where": "" if len(held) == total else ", ".join(sorted(held))} for text, held in accounts.items()]
+
+    return {"key": key, "name": view["display"], "company": lines(now["single"]["company"]), "nickname": view["nickname"],
+            "phones": lines(now["lists"]["phones"]), "emails": lines(now["lists"]["emails"]),
             "phone_keys": [r["key"] for r in lists["phones"]], "email_keys": [r["key"] for r in lists["emails"]],
             "name_key": fold(f"{view['name_parts'][1]} {view['name_parts'][3]}") or fold(view["company"]),
             "held": view["held"], "pending": pending}
@@ -510,10 +525,18 @@ def _new_person_row(review: dict, key: str, entry: dict, names: dict, skips: _Sk
         "create": None if row["skipped"] else {"accounts": list(names), "contact": entry["contact"]}}
     review["people"].append({"key": key, "name": entry["name"], "rows": [row], "held": False})
     review["pending"][key] = "new"
-    view = {"display": entry["name"], "company": entry["contact"]["set"].get("company", ""),
-            "nickname": entry["contact"]["set"].get("nickname", ""), "held": False,
-            "name_parts": entry["contact"]["set"].get("name", [""] * 5),
-            "lists": {f: [r for r in entry["contact"]["add"] if r["field"] == f] for f in MULTI}}
+    s = entry["contact"]["set"]
+    parts = s.get("name", [""] * 5)
+    entered = {"name_parts": parts, "name": " ".join(filter(None, parts)), **{f: s.get(f, "") for f in CLEARABLE},
+               "lists": {f: [{k: r[k] for k in ("value", "label", "key", "parts")} for r in entry["contact"]["add"]
+                             if r["field"] == f] for f in MULTI}}
+    # It's held nowhere yet, so what it'd hold stands in for what the accounts hold today.
+    now = {"single": {f: [{"text": show_all(f, entered[f]), "accounts": []}] if entered[f] else [] for f in SINGLE},
+           "lists": {f: [{"text": _text(f, r["value"]), "label": r["label"], "key": r["key"], "accounts": []}
+                         for r in entered["lists"][f]] for f in MULTI}}
+    view = {**entered, "display": entry["name"], "held": False, "new": True, "now": now, "baseline": None, "groups": [],
+            "photo": "", "extras": [], "in": [], "missing": list(names.values())}
+    review["views"][key] = view
     review["directory"].append(_directory_entry(key, view, "new"))
 
 
@@ -852,6 +875,31 @@ class _Person:
             self._written_rows(field, noun)
             self._order_rows(field, noun)
         self.ops["update"] = {a: {"ref": self.first[a].ref, **e} for a, e in self.edits.items() if has_edits(e)}
+
+    def held_now(self) -> dict:
+        """What the accounts hold today, exactly as written, for the Contacts pages. Each different version of a
+        value is listed with the accounts that hold it, the same value in one label or another counting as two."""
+        single, lists = {}, {}
+        for field in SINGLE:
+            found = {}
+            for a, c in self.first.items():
+                if value := (c.name() if field == "name" else getattr(c, field)):
+                    found.setdefault(value, []).append(self.names[a])
+            single[field] = [{"text": show_all(field, value), "accounts": sorted(held)} for value, held in found.items()]
+        for field in MULTI:
+            rank = {r["key"]: i for i, r in enumerate(self.merged["baseline"]["lists"][field])}
+            found = {}
+            for a, c in self.first.items():
+                for v in getattr(c, field):
+                    key = v.key or fold(v.value)
+                    if key:
+                        text = _address_text(v.parts) if field == "addresses" else _text(field, v.value)
+                        item = found.setdefault((key, text, v.label.lower()), {
+                            "text": text, "label": v.label, "key": key, "accounts": []})
+                        if self.names[a] not in item["accounts"]:
+                            item["accounts"].append(self.names[a])
+            lists[field] = sorted(found.values(), key=lambda item: rank.get(item["key"], len(rank)))
+        return {"single": single, "lists": lists}
 
     def settled(self, edit: dict) -> dict:
         """The fields of a pending edit that need nothing more: every account holds them, or you chose to keep

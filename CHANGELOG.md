@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.1
+
+- **Label dropdowns on the contact form:** each label is a dropdown of the ones iCloud and Google both have, ending in **Custom…** to type your own, like the review. New rows start on a likely label, such as mobile for a phone.
+- **Edit a new contact before applying it:** its Apply page and card have an **Edit** button that reopens the form with what you typed.
+- **Waiting to be applied:** anything entered and not applied is listed at the top of **Contacts**, with **Apply**, **Edit** and **Discard**. Leaving a page doesn't lose it or apply it.
+- **Duplicate warning:** a contact you entered earlier and haven't applied is called that, with **Edit** and **Discard**, instead of looking like one already in your accounts.
+- **The Contacts list and cards show what the accounts hold today**, exactly as written, not how it'll look after the next apply. Every number and email has its own line, and a value only some accounts have says which. Where something's going to change, the card shows that separately.
+- The review's dropdown for related names now offers the labels iCloud and Google both have.
+
 ## 0.4.0
 
 You can now find, edit, add and delete contacts on the Contact Sync page, once, for every account. Nothing is written until you press **Apply now**, which makes the same checks and backup as any apply.

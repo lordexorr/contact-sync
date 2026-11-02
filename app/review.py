@@ -151,6 +151,11 @@ def add_new_person(person: dict) -> str:
     return key
 
 
+def update_new_person(key: str, person: dict) -> None:
+    """Replace an entered contact that hasn't been applied."""
+    _update(lambda d: d.setdefault("new_people", {}).update({key: person}))
+
+
 def finish_new_people(keys) -> None:
     """Forget entered contacts that have been created."""
     if keys:
@@ -397,20 +402,23 @@ def _changes(review: dict) -> str:
 def _person_footer(review: dict, person: dict) -> str:
     if person["held"]:
         return "<p class='muted'>Waiting on a possible match above. Answer it to apply this person's changes.</p>"
-    discard = discard_button(review, person["key"])
+    buttons = pending_buttons(review, person["key"])
     if plan.is_empty(plan.scope(review, person["key"])):
-        return f"<div class='row'>{discard}</div>" if discard else ""
+        return f"<div class='row'>{buttons}</div>" if buttons else ""
     return (f"<div class='row'><a class='button secondary' href='apply?person={esc(quote(person['key'], safe=''))}'>"
-            f"Apply just {esc(person['name'])}…</a>{discard}</div>")
+            f"Apply just {esc(person['name'])}…</a>{buttons}</div>")
 
 
-def discard_button(review: dict, key: str) -> str:
-    """A button to forget what was entered on the Contacts pages for this person, if anything's waiting."""
+def pending_buttons(review: dict, key: str) -> str:
+    """Buttons for what was entered on the Contacts pages for this person, if anything's waiting: go back and change
+    it, or forget it."""
     words = {"edit": "Discard my edit", "delete": "Don't delete", "new": "Discard this new contact"}
     pending = review.get("pending", {}).get(key)
     if not pending:
         return ""
-    return (f"<form method='post' action='contact/discard'><input type='hidden' name='person' value='{esc(key)}'>"
+    edit = (f"<a class='button secondary' href='contact/edit?person={esc(quote(key, safe=''))}'>Edit</a>"
+            if pending != "delete" else "")
+    return (f"{edit}<form method='post' action='contact/discard'><input type='hidden' name='person' value='{esc(key)}'>"
             f"<button class='secondary'>{words[pending]}</button></form>")
 
 
@@ -578,14 +586,14 @@ def apply_body(review: dict | None, person: str | None, checking: bool) -> str:
                      "They're left as they are.")
     notes_html = "".join(f"<p class='muted'>{esc(n)}</p>" for n in notes)
     back = "<a href='review'>Back to the review</a>"
-    discard = discard_button(review, person) if person in people else ""
-    discard_row = f"<div class='row'>{discard}</div>" if discard else ""
+    buttons = pending_buttons(review, person) if person in people else ""
+    discard_row = f"<div class='row'>{buttons}</div>" if buttons else ""
     if plan.is_empty(work):
         return f"{heading}{notes_html}<p>Nothing to apply.</p>{discard_row}<p>{back}</p>"
     if checking:
         return f"{heading}<p class='muted'>A check is running. This page is ready once it finishes.</p>"
     return (
-        f"{heading}{_person_changes(review, person)}{_totals(work, person in people)}{notes_html}{_steps(person in people)}"
+        f"{heading}{person_changes(review, person)}{_totals(work, person in people)}{notes_html}{_steps(person in people)}"
         "<form method='post' action='apply' onsubmit=\"this.querySelector('button').disabled=true\">"
         f"<input type='hidden' name='person' value='{esc(person or '')}'>"
         f"<input type='hidden' name='token' value='{plan.digest(work)}'>"
@@ -593,8 +601,8 @@ def apply_body(review: dict | None, person: str | None, checking: bool) -> str:
     )
 
 
-def _person_changes(review: dict, person: str | None) -> str:
-    """One person's comparison table on their Apply page, so the changes are in view before applying them."""
+def person_changes(review: dict, person: str | None) -> str:
+    """One person's comparison table, to see on their card or Apply page; "" with nothing to change."""
     found = next((p for p in review["people"] if p["key"] == person), None)
     if not found:
         return ""
