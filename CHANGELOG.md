@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.4.0
+
+You can now find, edit, add and delete contacts on the Contact Sync page, once, for every account. Nothing is written until you press **Apply now**, which makes the same checks and backup as any apply.
+
+- **Contacts:** a list of everyone, searchable by name, company, phone number or email. Open someone to see everything every account will have after the next apply.
+- **Edit:** change a name, nickname, company, job title, birthday, notes, phone numbers, emails, addresses, websites, related names or dates, with their labels and order. **Save** goes straight to that person's Apply page, which shows what changes in each account. **Discard** forgets the edit. The usual rules apply to what you type, including the phone format and leaving off a US country. If an account changes the same detail before you apply, the review asks which to keep.
+- **New contact:** creates someone in every account. If the name, phone number or email is already in your contacts, the form lists who has it, and **Add anyway** adds them regardless.
+- **Delete everywhere:** deletes someone from every account, after you confirm on their card and again with **Apply now**.
+- A contact waiting on a possible match can't be edited or deleted until you answer it, so a change can't land on the wrong person.
+- A person's Apply page now shows the table of what changes for them.
+- When a company changes on an iCloud card with no person's name, the card's displayed name changes with it.
+
 ## 0.3.18
 
 - **US phone numbers** now use one format in every account: (555) 555-0123. Any US number written another way, such as with +1 or 1 in front or as ten digits with no spacing, shows up in the review as a change to that format. You don't have to pick a wording, you can untick the row, and nothing is written until you apply. Numbers with another country's code and short numbers stay as they are. An extension stays on the end, like (555) 555-0123 x12. Matching contacts isn't affected.

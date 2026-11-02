@@ -6,7 +6,8 @@ from collections import Counter, defaultdict
 from datetime import datetime
 
 from . import match, photos
-from .model import Contact, Value, fold, label_text, us_phone, without_us_country
+from .model import (Contact, Value, address_key, date_key, email_key, fold, label, label_text, phone_key, url_key,
+                    us_phone, without_us_country)
 
 # Fields with one value per contact, and their names on the review page.
 SINGLE = {"name": "Name", "nickname": "Nickname", "company": "Company", "title": "Job title",
@@ -42,11 +43,13 @@ def build(contacts: list[Contact], accounts: list[dict], decisions: dict, base: 
     is, a skipped list value ("<person>|<field>=<value>") is left out of every account, and a kept one stays
     in every account even when an account deleted it. "pick_seen" and "skip_seen" fingerprint what a pick or
     an unticked row was about, so it stops counting once that changes. "extras" says what happens to each
-    detail only Google can hold: "main", "notes" or "delete". base is what the accounts held after the last
-    apply (see base.py).
+    detail only Google can hold: "main", "notes" or "delete". "edits", "deletes" and "new_people" hold what was
+    entered on the Contacts pages, waiting to be applied (see edit_from and new_person). base is what the
+    accounts held after the last apply (see base.py).
 
     review["sync"] holds the edits: for each person, the copies to delete, create and update, and the group
-    changes, one per account and group. Skipped rows make none.
+    changes, one per account and group. Skipped rows make none. review["directory"] and review["views"] are
+    what the Contacts pages show.
     """
     names = _column_names(accounts)
     contacts = [c for c in contacts if c.account in names]
@@ -67,9 +70,11 @@ def build(contacts: list[Contact], accounts: list[dict], decisions: dict, base: 
         refs, [a for a in names if a not in {by_ref[r].account for r in refs}]))
     mass = {a for a, n in gone.items() if n > MASS_DELETION}
     keyed = _decision_keys(decisions)
+    edits, deleting = decisions.get("edits", {}), set(decisions.get("deletes", []))
 
     review = {"columns": list(names.values()), "suggestions": [], "conflicts": [], "people": [], "groups": [],
               "duplicates": [], "extras": [], "clusters": clusters, "sync": {"names": names, "people": {}, "groups": []},
+              "directory": [], "views": {}, "pending": {}, "edit_settled": {},
               "warnings": [f"{gone[a]:,} contacts have gone from {names[a]} since the last sync, more than usual. "
                            "Deleting them from the other accounts waits until you tick each one, so check that "
                            "account first. Applying without ticking them leaves every account as it is, and "
@@ -92,12 +97,21 @@ def build(contacts: list[Contact], accounts: list[dict], decisions: dict, base: 
         # Decisions are filed under a person's key: their first ref when the decision was made. A new copy can
         # sort ahead of it, so a person keeps the key their decisions already use.
         key = next((r for r in refs if r in keyed), refs[0])
-        merged, conflicts = _merge(key, copies, picks, names, last, decisions.get("extras", {}))
+        merged, conflicts = _merge(key, copies, picks, names, last, decisions.get("extras", {}), edits.get(key))
         review["conflicts"] += [{**c, "person": merged["display"]} for c in conflicts]
-        person = _Person(key, copies, merged, names, skips, keeps, last, picks)
+        person = _Person(key, copies, merged, names, skips, keeps, last, picks, key in deleting)
         person.compare(duplicates, mass)
         review["conflicts"] += [{**c, "person": merged["display"]} for c in person.conflicts]
         person.ops["held"] = refs[0] in waiting
+        if key in edits or key in deleting:
+            review["pending"][key] = "delete" if key in deleting else "edit"
+        if key in edits:
+            review["edit_settled"][key] = person.settled(edits[key])
+        review["views"][key] = {**merged["view"], "baseline": merged["baseline"], "groups": merged["groups"],
+                                "photo": merged["photo"], "extras": merged["extras"]["entries"],
+                                "display": merged["display"], "held": person.ops["held"],
+                                "in": [names[a] for a in person.first], "missing": [names[a] for a in person.missing]}
+        review["directory"].append(_directory_entry(key, review["views"][key], review["pending"].get(key, "")))
         if not person.ops["delete"]:
             person.memberships(have, dropped, to_group, from_group, totals)
             for a, c in person.first.items():
@@ -116,7 +130,10 @@ def build(contacts: list[Contact], accounts: list[dict], decisions: dict, base: 
         if person.rows:
             review["people"].append({"key": key, "name": merged["display"], "rows": person.rows,
                                      "held": person.ops["held"]})
+    for key, entry in decisions.get("new_people", {}).items():
+        _new_person_row(review, key, entry, names, skips)
     review["people"].sort(key=lambda p: fold(p["name"]))
+    review["directory"].sort(key=lambda d: fold(d["name"]))
     review["groups"], review["sync"]["groups"] = _group_rows(
         names, have, dropped, spelling, members, to_group, from_group, totals, skips, last)
     rows, ops = _listed_rows(names, unlisted, skips)
@@ -166,6 +183,74 @@ def digest(work: dict) -> str:
 def held_back(review: dict) -> int:
     """How many people with changes are waiting on a possible match."""
     return sum(p["held"] and _edits(p) for p in review["sync"]["people"].values())
+
+
+def tidy_text(field: str, value: str) -> str:
+    """A single value as every account should hold it."""
+    return _compare_key(field, value)
+
+
+def list_value(field: str, value: str, typed_label: str, parts: list[str] | None = None) -> dict | None:
+    """A list value typed on the Contacts pages, as every account should hold it, or None if it's blank. The same
+    rules apply as to what's read from the accounts: phone format, no US country."""
+    tag = label(typed_label)[0]
+    if field == "addresses":
+        parts = without_us_country(["\n".join(p.splitlines()).strip() for p in (list(parts or []) + [""] * 5)[:5]])
+        if not any(parts):
+            return None
+        street, city, region, postcode, _ = parts
+        return {"value": _address_text(parts), "label": tag, "key": address_key(street, city, postcode, region), "parts": parts}
+    value = (value or "").strip()
+    if not value:
+        return None
+    if field == "phones":
+        value = us_phone(value)
+    keys = {"phones": phone_key, "emails": email_key, "urls": url_key, "related": fold, "dates": date_key}
+    return {"value": value, "label": tag, "key": keys[field](value) or fold(value), "parts": []}
+
+
+def edit_from(baseline: dict, entered: dict) -> dict:
+    """A pending edit: what was entered on a contact's form that differs from what the accounts should hold without
+    it. "from" is kept, so that if the accounts move on before it's applied, the review can ask."""
+    edit = {"set": {}, "lists": {}}
+    name = " ".join(filter(None, entered["name_parts"]))
+    if name != baseline["name"]:
+        edit["set"]["name"] = {"from": baseline["name"], "to": name, "parts": entered["name_parts"]}
+    for field in CLEARABLE:
+        if entered[field] != baseline[field]:
+            edit["set"][field] = {"from": baseline[field], "to": entered[field]}
+    for field in MULTI:
+        old = [(_exact(field, r["value"], r["parts"]), r["label"].lower()) for r in baseline["lists"][field]]
+        new = [(_exact(field, r["value"], r["parts"]), r["label"].lower()) for r in entered["lists"][field]]
+        if old != new:
+            edit["lists"][field] = {"from": [text for text, _ in old], "to": entered["lists"][field]}
+    return edit
+
+
+def new_person(entered: dict) -> dict:
+    """A contact entered on the Contacts pages, to create in every account: {"name", "contact"}."""
+    contact = _blank()
+    if any(entered["name_parts"]):
+        contact["set"]["name"] = entered["name_parts"]
+    contact["set"] |= {f: entered[f] for f in CLEARABLE if entered[f]}
+    contact["add"] = [{"field": f, **r} for f in MULTI for r in entered["lists"][f]]
+    name = " ".join(filter(None, entered["name_parts"])) or entered["company"]
+    return {"name": name, "contact": contact}
+
+
+def similar(review: dict, entered: dict) -> list[dict]:
+    """People who may be the one just entered: the same name, phone number or email address."""
+    name = fold(f"{entered['name_parts'][1]} {entered['name_parts'][3]}") or fold(entered["company"])
+    phones = {r["key"] for r in entered["lists"]["phones"]}
+    emails = {r["key"] for r in entered["lists"]["emails"]}
+    found = []
+    for d in review["directory"]:
+        why = [word for word, same in (("the same name", d["name_key"] == name),
+                                       ("the same phone number", phones & set(d["phone_keys"])),
+                                       ("the same email address", emails & set(d["email_keys"]))) if same]
+        if why:
+            found.append({"key": d["key"], "name": d["name"], "why": " and ".join(why)})
+    return found
 
 
 def contact_changes(c: Contact) -> dict:
@@ -243,7 +328,8 @@ class _Skips(set):
 def _decision_keys(decisions: dict) -> set[str]:
     """The person keys that unticks, picks and duplicate choices are filed under ("<account>|<id>")."""
     ids = [*decisions.get("skips", []), *decisions.get("keeps", []), *decisions.get("picks", {}),
-           *decisions.get("duplicates", {}), *decisions.get("extras", {})]
+           *decisions.get("duplicates", {}), *decisions.get("extras", {}), *decisions.get("edits", {}),
+           *decisions.get("deletes", [])]
     return {"|".join(i.split("|", 2)[:2]) for i in ids if not i.startswith("group|")}
 
 
@@ -332,12 +418,13 @@ class _Last:
 
 # --- Working out the person every account should have ---
 
-def _merge(key: str, members: list[Contact], picks: _Picks, names: dict, last: _Last,
-           extras: dict) -> tuple[dict, list[dict]]:
+def _merge(key: str, members: list[Contact], picks: _Picks, names: dict, last: _Last, extras: dict,
+           edit: dict | None = None) -> tuple[dict, list[dict]]:
     """The person as all accounts should have them, and the fields whose values disagree.
 
     merged["cleared"] maps each field (and "photo") that an account deleted since the last apply, while the
     others kept it unchanged, to the accounts that deleted it. Those fields are emptied everywhere.
+    merged["baseline"] is the person without any pending edit, and merged["view"] the person with it.
     """
     merged, conflicts, cleared = {}, [], {}
     for field, title in SINGLE.items():
@@ -377,6 +464,15 @@ def _merge(key: str, members: list[Contact], picks: _Picks, names: dict, last: _
                 conflicts.append(_conflict(f"{key}|{field}#{v.key}", f"How this {MULTI[field]} is written", spellings,
                                            written, names, picks, lambda o: {"value": _text(field, o["value"])}))
             v.value, v.parts = spellings[written]["value"], spellings[written]["parts"]
+        # In the order the accounts list them, when they agree.
+        listed = [list(dict.fromkeys(k for x in getattr(c, field) if (k := x.key or fold(x.value)))) for c in members]
+        order = _agreed_order([v.key for v in merged[field]], listed)
+        if order:
+            merged[field].sort(key=lambda v: order.index(v.key))
+    merged["edit"] = {"removed": {}, "kept": {}, "order": {}, "dropped": {"set": [], "lists": []}}
+    merged["baseline"] = _view(merged)
+    _apply_edit(key, merged, conflicts, cleared, picks, edit or {})
+    merged["view"] = _view(merged)
     merged["extras"] = _extra_details(key, members, merged, extras, cleared, names)
     merged["groups"] = sorted({fold(g): g for c in members for g in c.groups}.values(), key=fold)
     merged["photo"], merged["photo_from"] = _merge_photo(key, members, picks, names, conflicts, last, cleared)
@@ -384,6 +480,102 @@ def _merge(key: str, members: list[Contact], picks: _Picks, names: dict, last: _
     merged["display"] = (merged["name"] or merged["company"]
                          or next((v.value for v in merged["emails"] + merged["phones"]), "") or "(no name)")
     return merged, conflicts
+
+
+def _view(merged: dict) -> dict:
+    """The person as the Contacts pages show them."""
+    removed = merged["edit"]["removed"]
+    return {"name_parts": list(merged["name_parts"]), **{f: merged[f] for f in SINGLE},
+            "lists": {f: [{"value": v.value, "label": v.label, "key": v.key, "parts": list(v.parts)}
+                          for v in merged[f] if v.key not in removed.get(f, ())] for f in MULTI}}
+
+
+def _directory_entry(key: str, view: dict, pending: str) -> dict:
+    """One line of the Contacts list, and what's needed to search it and spot a duplicate."""
+    lists = view["lists"]
+    return {"key": key, "name": view["display"], "company": view["company"], "nickname": view["nickname"],
+            "phones": [r["value"] for r in lists["phones"]], "emails": [r["value"] for r in lists["emails"]],
+            "phone_keys": [r["key"] for r in lists["phones"]], "email_keys": [r["key"] for r in lists["emails"]],
+            "name_key": fold(f"{view['name_parts'][1]} {view['name_parts'][3]}") or fold(view["company"]),
+            "held": view["held"], "pending": pending}
+
+
+def _new_person_row(review: dict, key: str, entry: dict, names: dict, skips: _Skips) -> None:
+    """A contact entered on the Contacts pages, which no account has yet."""
+    cells = {name: [{"text": "Not in this account", "state": "add"}] for name in names.values()}
+    row = _row(f"{key}|new", "Contact", cells, list(names), names,
+               {"kind": "text", "value": "New contact in every account", "details": _new_details(entry["contact"])}, skips)
+    review["sync"]["people"][key] = {
+        "name": entry["name"], "refs": [], "held": False, "undeleted": False, "update": {}, "delete": [], "drop": [],
+        "create": None if row["skipped"] else {"accounts": list(names), "contact": entry["contact"]}}
+    review["people"].append({"key": key, "name": entry["name"], "rows": [row], "held": False})
+    review["pending"][key] = "new"
+    view = {"display": entry["name"], "company": entry["contact"]["set"].get("company", ""),
+            "nickname": entry["contact"]["set"].get("nickname", ""), "held": False,
+            "name_parts": entry["contact"]["set"].get("name", [""] * 5),
+            "lists": {f: [r for r in entry["contact"]["add"] if r["field"] == f] for f in MULTI}}
+    review["directory"].append(_directory_entry(key, view, "new"))
+
+
+def _new_details(contact: dict) -> str:
+    s = contact["set"]
+    lines = [s.get("company", "")] + [f"{a['value']} ({label_text(a['label'])})" for a in contact["add"]
+                                      if a["field"] in ("phones", "emails")]
+    return " · ".join(line for line in lines if line)
+
+
+def _apply_edit(key: str, merged: dict, conflicts: list[dict], cleared: dict, picks: _Picks, edit: dict) -> None:
+    """Bring a pending edit into the person, in place of what the accounts would otherwise end up with. Every row
+    that follows then compares the accounts with it, the same as with any other value."""
+    state = merged["edit"]
+    for field, change in edit.get("set", {}).items():
+        shown = lambda value, f=field: show(f, value) or "(empty)"
+        if not _edit_stands(key, "set", field, SINGLE[field], merged[field], change["from"], change["to"], state, picks,
+                            conflicts, shown):
+            continue
+        merged[field] = change["to"]
+        if field == "name":
+            merged["name_parts"] = change["parts"]
+        elif change["to"]:
+            cleared.pop(field, None)
+        else:
+            cleared[field] = []
+        conflicts[:] = [c for c in conflicts if c["id"] != f"{key}|{field}"]
+    for field, change in edit.get("lists", {}).items():
+        now = [_exact(field, v.value, v.parts) for v in merged[field]]
+        wanted = [_exact(field, r["value"], r["parts"]) for r in change["to"]]
+        by_exact = {_exact(field, v.value, v.parts): _text(field, v.value) for v in merged[field]}
+        by_exact |= {_exact(field, r["value"], r["parts"]): _text(field, r["value"]) for r in change["to"]}
+        shown = lambda texts, lookup=by_exact: " · ".join(lookup[t] for t in texts) or "(none)"
+        if not _edit_stands(key, "lists", field, f"{MULTI[field].capitalize()} list", now, change["from"], wanted, state,
+                            picks, conflicts, shown):
+            continue
+        written = [Value(r["value"], r["label"], r["key"], list(r["parts"])) for r in change["to"]]
+        keys = {v.key for v in written}
+        state["removed"][field] = {v.key for v in merged[field]} - keys
+        state["kept"][field] = keys
+        state["order"][field] = [v.key for v in written]
+        merged[field] = written + [v for v in merged[field] if v.key not in keys]
+        conflicts[:] = [c for c in conflicts if not c["id"].startswith(f"{key}|{field}#")]
+
+
+def _edit_stands(key: str, kind: str, field: str, title: str, now, before, wanted, state: dict, picks: _Picks,
+                 conflicts: list[dict], shown) -> bool:
+    """Whether a pending edit to one field counts. If the accounts have moved on since it was made, the review
+    asks which to keep, with nothing chosen for you, and until it's answered the edit waits."""
+    if now in (before, wanted):
+        return True
+    edit_id = f"{key}|edit:{field}"
+    values = [shown(wanted), shown(now)]
+    picked = picks.get(edit_id, values) if picks.get(edit_id, values) in ("edit", "now") else None
+    conflicts.append({"id": edit_id, "field": f"{title}: your edit, or what changed since", "chosen": picked,
+                      "seen": _fingerprint(sorted(values)), "decided": picked is not None, "required": True,
+                      "waiting": "Until you choose, your edit waits and the accounts stay as they are.",
+                      "options": [{"key": "edit", "value": values[0], "accounts": ["Your edit"]},
+                                  {"key": "now", "value": values[1], "accounts": ["In the accounts now"]}]})
+    if picked == "now":
+        state["dropped"][kind].append(field)
+    return picked == "edit"
 
 
 def _compare_key(field: str, value: str) -> str:
@@ -616,9 +808,9 @@ class _Person:
     and the one kept if the copies are merged."""
 
     def __init__(self, key: str, copies: list[Contact], merged: dict, names: dict, skips: _Skips, keeps: set,
-                 last: _Last, picks: _Picks):
+                 last: _Last, picks: _Picks, deleting: bool = False):
         self.key, self.merged, self.names = key, merged, names
-        self.skips, self.keeps, self.last, self.picks = skips, keeps, last, picks
+        self.skips, self.keeps, self.last, self.picks, self.deleting = skips, keeps, last, picks, deleting
         self.conflicts: list[dict] = []  # choices that depend on what's kept, such as the order of a list
         by_account = defaultdict(list)
         for c in copies:
@@ -640,11 +832,12 @@ class _Person:
         """Fill in the rows, and the edits for the rows left ticked. duplicates holds the user's merge or keep
         choices for copies in the same account; mass, the accounts where unusually many contacts have gone."""
         gone = self.last.deleted_from(self.ops["refs"], self.missing)
-        if gone:
-            if not self._delete_row(gone, bool(set(gone) & mass))["skipped"]:
+        if gone or self.deleting:
+            # Deleting on the Contacts page is your own request, so it never starts unticked.
+            if not self._delete_row(gone, bool(set(gone) & mass) and not self.deleting)["skipped"]:
                 self.ops["delete"] = list(self.ops["refs"])
                 return  # nothing else about a person matters once they're being deleted
-            self.ops["undeleted"] = True
+            self.ops["undeleted"] = bool(gone)
         elif self.missing and not self._contact_row()["skipped"]:
             self.ops["create"] = {"accounts": self.missing, "contact": self._new_contact()}
         for a in self.extras:
@@ -659,6 +852,23 @@ class _Person:
             self._written_rows(field, noun)
             self._order_rows(field, noun)
         self.ops["update"] = {a: {"ref": self.first[a].ref, **e} for a, e in self.edits.items() if has_edits(e)}
+
+    def settled(self, edit: dict) -> dict:
+        """The fields of a pending edit that need nothing more: every account holds them, or you chose to keep
+        what the accounts hold instead."""
+        dropped = self.merged["edit"]["dropped"]
+        done = {"set": list(dropped["set"]), "lists": list(dropped["lists"])}
+        if self.missing:
+            return done
+        for field, change in edit.get("set", {}).items():
+            if all((c.name() if field == "name" else getattr(c, field)) == change["to"] for c in self.first.values()):
+                done["set"].append(field)
+        for field, change in edit.get("lists", {}).items():
+            wanted = [(_exact(field, r["value"], r["parts"]), r["label"].lower()) for r in change["to"]]
+            if all([(_exact(field, x.value, x.parts), x.label.lower()) for x in getattr(c, field)] == wanted
+                   for c in self.first.values()):
+                done["lists"].append(field)
+        return done
 
     def memberships(self, have: dict, dropped: set, to_group, from_group, totals) -> None:
         """Note the groups the person joins in each account, and the ones they leave everywhere because an
@@ -914,7 +1124,8 @@ class _Person:
         now = {a: [k for k in held if k in keys] for a, held in now.items()}
         text = {v.key: _text(field, v.value) for v in kept}
         plural = noun + ("es" if noun.endswith("s") else "s")
-        order = _agreed_order(keys, list(now.values()))
+        edited = self.merged["edit"]["order"].get(field)  # the order typed on the Contacts page, which isn't asked about
+        order = [k for k in edited if k in keys] if edited else _agreed_order(keys, list(now.values()))
         row_id = f"{self.key}|{field}@order"
         if order is None:
             options = {}
@@ -931,7 +1142,9 @@ class _Person:
             if chosen is None:
                 return
             order = options[chosen]["order"]
-            changing = [a for a, held in now.items() if held != [k for k in order if k in held]]
+            edited = order
+        changing = [a for a, held in now.items() if held != [k for k in order if k in held]]
+        if edited and changing:
             cells = {self.names[a]: [{"text": " · ".join(text[k] for k in held) or "—",
                                       "state": "old" if a in changing else ""}]
                      + ([{"text": " · ".join(text[k] for k in order), "state": "new"}] if a in changing else [])
@@ -941,7 +1154,7 @@ class _Person:
                             basis=sorted([a, held] for a, held in now.items()))
             if row["skipped"]:
                 return
-        icloud = {a: getattr(c, field) for a, c in self.first.items() if a.startswith("icloud:")}
+        icloud ={a: getattr(c, field) for a, c in self.first.items() if a.startswith("icloud:")}
         marked = any(x.pref for values in icloud.values() for x in values)
         for a, c in self.first.items():
             repeats = len(getattr(c, field)) != len(now[a])
@@ -973,12 +1186,19 @@ class _Person:
         """Whether every account ends up with this value: unless it's unticked, or an account deleted it since
         the last apply and it wasn't ticked again."""
         value_id = f"{self.key}|{field}={v.key}"
+        edit = self.merged["edit"]
+        if v.key in edit["removed"].get(field, ()):
+            return value_id in self.keeps
+        if v.key in edit["kept"].get(field, ()):
+            return value_id not in self.skips
         return value_id in self.keeps or (value_id not in self.skips and not self._deleted_by(field, v.key))
 
     def _deleted_by(self, field: str, key: str) -> list[str]:
         return [a for a, c in self.first.items() if key not in self.values[a][field] and key in self.last.lists(c, field)]
 
     def _deleted_note(self, field: str, key: str) -> str:
+        if key in self.merged["edit"]["removed"].get(field, ()):
+            return "Removed in your edit"
         by = self._deleted_by(field, key)
         return f"Deleted from {', '.join(self.names[a] for a in by)} since the last sync" if by else ""
 

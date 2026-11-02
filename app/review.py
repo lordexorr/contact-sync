@@ -2,6 +2,7 @@
 it's made."""
 import html
 import threading
+import uuid
 from collections import Counter, defaultdict
 from urllib.parse import quote
 
@@ -128,6 +129,51 @@ def reset() -> None:
     _update(lambda d: d.clear())
 
 
+def save_edit(key: str, edit: dict) -> None:
+    """Keep what was entered on a contact's form until it's applied. Rows unticked for those fields are ticked
+    again, since entering a value is asking for it. An edit that changes nothing cancels any waiting."""
+    def change(d):
+        edits = d.setdefault("edits", {})
+        if edit["set"] or edit["lists"]:
+            edits[key] = edit
+        else:
+            edits.pop(key, None)
+        prefixes = tuple(f"{key}|field:{f}" for f in edit["set"]) + tuple(
+            f"{key}|{f}{mark}" for f in edit["lists"] for mark in (":", "=", "~", "#", "@"))
+        d["skips"] = [i for i in d.get("skips", []) if not i.startswith(prefixes)]
+    _update(change)
+
+
+def add_new_person(person: dict) -> str:
+    """Keep a contact entered on the Contacts page until it's applied. Its key while no account has it."""
+    key = f"new|{uuid.uuid4().hex}"
+    _update(lambda d: d.setdefault("new_people", {}).update({key: person}))
+    return key
+
+
+def finish_new_people(keys) -> None:
+    """Forget entered contacts that have been created."""
+    if keys:
+        _update(lambda d: d.update(new_people={k: v for k, v in d.get("new_people", {}).items() if k not in keys}))
+
+
+def request_delete(key: str) -> None:
+    """Ask for a person to be deleted from every account when changes are next applied."""
+    def change(d):
+        d["deletes"] = sorted(set(d.get("deletes", [])) | {key})
+        d["skips"] = [i for i in d.get("skips", []) if i != f"{key}|new"]
+    _update(change)
+
+
+def discard_pending(key: str) -> None:
+    """Forget an edit, delete or new contact that hasn't been applied."""
+    def change(d):
+        d.get("edits", {}).pop(key, None)
+        d.get("new_people", {}).pop(key, None)
+        d["deletes"] = [k for k in d.get("deletes", []) if k != key]
+    _update(change)
+
+
 def tidy_decisions(options: dict) -> None:
     """After a check or an apply, forget choices about anything the accounts no longer differ on, so an answer
     given once can't undo a later edit. Nothing is forgotten while an account can't be read, because what it
@@ -156,6 +202,17 @@ def tidy(d: dict, review: dict) -> None:
     old_seen = d.get("pick_seen", {})
     d["pick_seen"] = {i: old_seen.get(i, pick_seen[i]) for i in d["picks"]}
     d["duplicates"] = {i: v for i, v in d.get("duplicates", {}).items() if i in duplicates}
+    # A pending edit lasts until every account holds it, and a delete until the person is gone.
+    people, settled = review["sync"]["people"], review.get("edit_settled", {})
+    d["deletes"] = [k for k in d.get("deletes", []) if k in people]
+    edits = {}
+    for key, edit in d.get("edits", {}).items():
+        done = settled.get(key, {})
+        left = {kind: {f: c for f, c in edit.get(kind, {}).items() if f not in done.get(kind, [])}
+                for kind in ("set", "lists")}
+        if key in people and (left["set"] or left["lists"]):
+            edits[key] = left
+    d["edits"] = edits
 
 
 def _note_seen(seen_by_id: dict, choice_id: str, seen: str) -> None:
@@ -192,8 +249,8 @@ def summary_card(review: dict | None, last_apply: str = "") -> str:
         matches = "Every account that could be read matches." if review.get("unread") else "Every account matches."
         body = (f"<p class='ok'>{matches} There's nothing to sync.</p>"
                 + (f"<p class='muted'>{kept}, under Open the review.</p>" if kept else ""))
-    return (head + body + "<div class='row'><a class='button' href='review'>Open the review</a></div>"
-            + last_apply + "</section>")
+    return (head + body + "<div class='row'><a class='button' href='review'>Open the review</a>"
+            "<a class='button secondary' href='contacts'>Contacts</a></div>" + last_apply + "</section>")
 
 
 def page_body(review: dict | None) -> str:
@@ -297,8 +354,8 @@ def _conflicts(items: list[dict]) -> str:
                 f"{' checked' if picked else ''}>"
                 f"{shown}<span class='muted'>{esc(', '.join(o['accounts']))}</span>{default}</label>"
             )
-        waits = ("<p class='muted'>Until you choose, every account keeps its own order.</p>"
-                 if c.get("required") and not c["decided"] else "")
+        waiting = c.get("waiting", "Until you choose, every account keeps its own order.")
+        waits = f"<p class='muted'>{esc(waiting)}</p>" if c.get("required") and not c["decided"] else ""
         return f"<div class='item'><b>{esc(c['person'])}</b> · {esc(c['field'])}{''.join(options)}{waits}</div>"
 
     waiting = [row(i, c) for i, c in enumerate(items) if not c["decided"]]
@@ -340,10 +397,21 @@ def _changes(review: dict) -> str:
 def _person_footer(review: dict, person: dict) -> str:
     if person["held"]:
         return "<p class='muted'>Waiting on a possible match above. Answer it to apply this person's changes.</p>"
+    discard = discard_button(review, person["key"])
     if plan.is_empty(plan.scope(review, person["key"])):
-        return ""
+        return f"<div class='row'>{discard}</div>" if discard else ""
     return (f"<div class='row'><a class='button secondary' href='apply?person={esc(quote(person['key'], safe=''))}'>"
-            f"Apply just {esc(person['name'])}…</a></div>")
+            f"Apply just {esc(person['name'])}…</a>{discard}</div>")
+
+
+def discard_button(review: dict, key: str) -> str:
+    """A button to forget what was entered on the Contacts pages for this person, if anything's waiting."""
+    words = {"edit": "Discard my edit", "delete": "Don't delete", "new": "Discard this new contact"}
+    pending = review.get("pending", {}).get(key)
+    if not pending:
+        return ""
+    return (f"<form method='post' action='contact/discard'><input type='hidden' name='person' value='{esc(key)}'>"
+            f"<button class='secondary'>{words[pending]}</button></form>")
 
 
 def _table(title: str, columns: list[str], rows: list[dict], footer: str = "") -> str:
@@ -489,11 +557,15 @@ def apply_body(review: dict | None, person: str | None, checking: bool) -> str:
     if undecided and not plan.is_empty(work):
         notes.append(f"{_n(undecided, 'value')} between accounts {'hasn' if undecided == 1 else 'haven'}'t been "
                      "picked. The value marked in the review is used.")
-    orders = sum(not c["decided"] and bool(c.get("required")) and (person is None or c["id"].startswith(person + "|"))
-                 for c in review["conflicts"])
+    asked = [c for c in review["conflicts"] if not c["decided"] and c.get("required")
+             and (person is None or c["id"].startswith(person + "|"))]
+    orders = sum("waiting" not in c for c in asked)
     if orders and not plan.is_empty(work):
         notes.append(f"{_n(orders, 'list')} {'hasn' if orders == 1 else 'haven'}'t had an order chosen. Every account "
                      "keeps its own order until you choose.")
+    if len(asked) > orders:
+        notes.append("The accounts changed after you edited this contact, so that part of your edit is waiting. "
+                     "Choose which to keep under Different values in the review.")
     open_dups = sum(not d["choice"] and (person is None or d["id"].startswith(person + "|"))
                     for d in review["duplicates"])
     if open_dups and not plan.is_empty(work):
@@ -506,17 +578,29 @@ def apply_body(review: dict | None, person: str | None, checking: bool) -> str:
                      "They're left as they are.")
     notes_html = "".join(f"<p class='muted'>{esc(n)}</p>" for n in notes)
     back = "<a href='review'>Back to the review</a>"
+    discard = discard_button(review, person) if person in people else ""
+    discard_row = f"<div class='row'>{discard}</div>" if discard else ""
     if plan.is_empty(work):
-        return f"{heading}{notes_html}<p>Nothing to apply.</p><p>{back}</p>"
+        return f"{heading}{notes_html}<p>Nothing to apply.</p>{discard_row}<p>{back}</p>"
     if checking:
         return f"{heading}<p class='muted'>A check is running. This page is ready once it finishes.</p>"
     return (
-        f"{heading}{_totals(work, person in people)}{notes_html}{_steps(person in people)}"
+        f"{heading}{_person_changes(review, person)}{_totals(work, person in people)}{notes_html}{_steps(person in people)}"
         "<form method='post' action='apply' onsubmit=\"this.querySelector('button').disabled=true\">"
         f"<input type='hidden' name='person' value='{esc(person or '')}'>"
         f"<input type='hidden' name='token' value='{plan.digest(work)}'>"
-        f"<div class='row'><button>Apply now</button>{back}</div></form>"
+        f"<div class='row'><button>Apply now</button>{back}</div></form>{discard_row}"
     )
+
+
+def _person_changes(review: dict, person: str | None) -> str:
+    """One person's comparison table on their Apply page, so the changes are in view before applying them."""
+    found = next((p for p in review["people"] if p["key"] == person), None)
+    if not found:
+        return ""
+    # To see, not to change: ticks and labels are changed in the review, which saves them as they're clicked.
+    table = _table("What changes", review["columns"], [r for r in found["rows"] if not r["skipped"]])
+    return table.replace("<input type='checkbox'", "<input type='checkbox' disabled").replace("<select ", "<select disabled ")
 
 
 def result_body(result: dict | None, progress, when) -> str:

@@ -4,13 +4,14 @@ import html
 import logging
 import os
 from datetime import datetime, time, timedelta
+from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 from aiohttp import web
 
 import requests
 
-from . import apply, check, google, notify, photos, review
+from . import apply, check, editor, google, notify, photos, review
 from .icloud import ICloudError
 from .settings import load_options
 
@@ -209,6 +210,56 @@ async def review_reset(request: web.Request) -> web.Response:
     review.reset()
     request.app[STATE].flash = ("ok", "Every match, choice and skip is forgotten.")
     raise go_to(request, "review")
+
+
+async def contacts_page(request: web.Request) -> web.Response:
+    state = request.app[STATE]
+    content = editor.contacts_body(review.current_plan(state.options))
+    return page(request, f"<p><a href='./'>← Contact Sync</a></p>{take_flash(state)}{content}")
+
+
+async def contact_page(request: web.Request) -> web.Response:
+    state = request.app[STATE]
+    content = editor.contact_body(review.current_plan(state.options), request.query.get("person", ""))
+    return page(request, f"{take_flash(state)}{content}")
+
+
+async def contact_edit(request: web.Request) -> web.Response:
+    state = request.app[STATE]
+    return page(request, editor.form_body(review.current_plan(state.options), request.query.get("person", "")))
+
+
+async def contact_new(request: web.Request) -> web.Response:
+    state = request.app[STATE]
+    return page(request, editor.form_body(review.current_plan(state.options)))
+
+
+async def contact_save(request: web.Request) -> web.Response:
+    state = request.app[STATE]
+    form = await request.post()
+    key = str(form.get("person", ""))
+    saved = editor.save(state.options, key, form)
+    if "key" not in saved:
+        return page(request, editor.form_body(review.current_plan(state.options), key, saved["entered"],
+                                              tuple(saved["errors"]), tuple(saved["similar"])))
+    if saved["unchanged"]:
+        state.flash = ("ok", "Nothing changed, so nothing is waiting to be applied.")
+        raise go_to(request, "contact?person=" + quote(saved["key"], safe=""))
+    raise go_to(request, "apply?person=" + quote(saved["key"], safe=""))
+
+
+async def contact_delete(request: web.Request) -> web.Response:
+    key = str((await request.post()).get("person", ""))
+    review.request_delete(key)
+    raise go_to(request, "apply?person=" + quote(key, safe=""))
+
+
+async def contact_discard(request: web.Request) -> web.Response:
+    state = request.app[STATE]
+    key = str((await request.post()).get("person", ""))
+    review.discard_pending(key)
+    state.flash = ("ok", "Discarded. Nothing was written to any account.")
+    raise go_to(request, "contacts")
 
 
 async def apply_page(request: web.Request) -> web.Response:
@@ -573,6 +624,20 @@ td details{margin-top:4px}
 label.value{display:block}
 .toast{position:fixed;right:16px;bottom:16px;padding:8px 14px;border-radius:8px;background:var(--ok);color:#fff}
 .toast.error{background:var(--bad)}
+input[type=search],form.edit input[type=text],form.edit textarea{width:100%;font:inherit;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text)}
+table.people tbody tr[hidden]{display:none}
+table.facts th{font-weight:normal;color:var(--muted);width:220px;font-size:14px}
+.note-text{white-space:pre-wrap}
+.edit-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px 12px}
+.edit-grid label{display:block;font-size:14px}
+.edit-grid input{margin-top:4px}
+.edit-row{display:flex;flex-wrap:wrap;align-items:flex-start;gap:6px;padding:6px 0;border-bottom:1px solid var(--line)}
+form.edit .edit-row input.label-box{width:150px;flex:none}
+form.edit .edit-row input.value-box{width:auto;flex:1 1 240px}
+.address-boxes{flex:1 1 320px;display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:6px}
+.address-boxes textarea{grid-column:1/-1}
+.row-buttons{display:flex;gap:4px}
+.row-buttons button{padding:6px 10px}
 """
 
 
@@ -591,6 +656,13 @@ def main() -> None:
         web.post("/review/label", review_label),
         web.post("/review/skip", review_skip),
         web.post("/review/reset", review_reset),
+        web.get("/contacts", contacts_page),
+        web.get("/contact", contact_page),
+        web.get("/contact/edit", contact_edit),
+        web.get("/contact/new", contact_new),
+        web.post("/contact/save", contact_save),
+        web.post("/contact/delete", contact_delete),
+        web.post("/contact/discard", contact_discard),
         web.get("/apply", apply_page),
         web.post("/apply", apply_start),
         web.get("/result", result_page),

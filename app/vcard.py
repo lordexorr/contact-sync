@@ -361,6 +361,9 @@ def _set(card: _Card, field: str, value) -> None:
         parts = re.split(r"(?<!\\);", found[0][4]) if found else [""]
         parts[0] = _esc(value)  # the department and anything after it stay
         card.put("ORG", ";".join(parts) if any(parts) else "")
+        name = card.find("N")
+        if value and (not name or not any(fields(name[0][4], 5))):  # a card with no name shows its company
+            card.put("FN", _esc(value))
     elif field == "birthday":
         card.put("BDAY", "")
         if value:

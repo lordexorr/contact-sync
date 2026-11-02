@@ -5,7 +5,7 @@ import logging
 import re
 import shutil
 import uuid
-from collections import Counter
+from collections import Counter, defaultdict
 from contextlib import ExitStack
 from datetime import datetime, timezone
 from pathlib import Path
@@ -83,10 +83,11 @@ def _apply(options: dict, person: str | None, token: str, tz, progress: Progress
     else:
         progress.step = "Checking this person's cards again"
         reviewed = review.current_plan(options)
-        refs = (reviewed or {}).get("sync", {}).get("people", {}).get(person, {}).get("refs")
-        if not refs:
+        ops = (reviewed or {}).get("sync", {}).get("people", {}).get(person)
+        if ops is None:
             result["status"], result["message"] = "stopped", STOPPED
             return
+        refs = ops["refs"]  # none for someone entered on the Contacts page, whom no account has yet
         run = check.read_some(options, refs)
         check.merge_records(run, set(refs))
         raw = run.raw
@@ -120,6 +121,8 @@ def _apply(options: dict, person: str | None, token: str, tz, progress: Progress
             writer.run()
         finally:
             _write_summary(folder, result, tz)
+            # Someone entered on the Contacts page now has cards, so the rest of what they need is an ordinary copy.
+            review.finish_new_people({k for (k, _) in writer.created})
 
     progress.step = "Checking the result"
     notes = []
@@ -154,8 +157,13 @@ def _record_result(options: dict, person: str | None, before: dict, writer: "_Wr
     # A new copy is the person it was made from, even with too little on it to match by, such as a first
     # name and a short number. Recording them together keeps them matched from now on.
     decided = review.decisions()
+    made = defaultdict(list)
+    for (k, _), ref in writer.created.items():
+        made[k].append(ref)
+    # Someone entered on the Contacts page has no card to start from, so their new cards go by the first of them.
+    anchor = {k: (people_before[k]["refs"] or refs)[0] for k, refs in made.items()}
     decided["same"] = sorted(set(decided.get("same", [])) | {
-        "||".join(sorted((people_before[k]["refs"][0], ref))) for (k, _), ref in writer.created.items()})
+        "||".join(sorted((anchor[k], ref))) for k, refs in made.items() for ref in refs if ref != anchor[k]})
     after = plan.build(contacts, accounts_now, decided, base.load())
     keys = [person] if person else [k for k, p in people_before.items() if not p["held"]]
     recorded = [k for k in keys if k in people_before and k not in writer.failed]
