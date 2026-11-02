@@ -633,7 +633,8 @@ table.facts th{font-weight:normal;color:var(--muted);width:220px;font-size:14px}
 .edit-grid input{margin-top:4px}
 .edit-row{display:flex;flex-wrap:wrap;align-items:flex-start;gap:6px;padding:6px 0;border-bottom:1px solid var(--line)}
 .label-choice{display:flex;flex-direction:column;gap:4px;flex:none;width:150px}
-form.edit .label-choice input.label-custom[hidden]{display:none}
+.group-choice{display:flex;flex-direction:column;gap:4px;flex:1 1 240px;max-width:420px}
+form.edit input.label-custom[hidden]{display:none}
 .where{font-size:13px}
 form.edit .edit-row input.value-box{width:auto;flex:1 1 240px}
 .address-boxes{flex:1 1 320px;display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:6px}

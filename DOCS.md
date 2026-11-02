@@ -121,10 +121,11 @@ Press **Contacts** on the Contact Sync page to find anyone in your accounts, by 
 Nothing here writes to an account. Whatever you enter waits until you press **Apply now** on the page that follows, which shows what changes in each account and makes the same checks and backup as any apply. Leaving that page doesn't lose or apply it: it stays under **Waiting to be applied** at the top of **Contacts**, and on the Review page, with **Edit** to change it and **Discard** to forget it.
 
 - **Edit** changes a name, nickname, company, job title, birthday, notes, phone numbers, emails, addresses, websites, related names or dates, with their labels, for every account. Each label has a dropdown of the ones iCloud and Google both have, ending in **Custom…** to type your own. Only what you change is kept as your edit. The first value in each list is the main one, and the arrows change the order. The usual rules apply to what you type: US phone numbers are written as (555) 555-0123, and a US country is left off. An edit that's waiting can be opened and changed again, and putting everything back cancels it. If an account changes the same detail before you apply, **Different values** asks which to keep, and your edit waits until you answer.
+- **Groups** on the same form add someone to any of your groups, or to a **New group…** created in every account, and take them out of one. Removing someone never deletes the group, even if they were its last member. The **Apply** page names the groups they join and leave in each account.
 - **New contact** creates someone in every account. If the name, phone number or email is already here, the form lists who has it, and **Add anyway** adds them regardless. That includes a contact you entered earlier and haven't applied, which you can then edit or discard.
 - **Delete everywhere** deletes someone from every account, after you confirm it twice: once on their card, and again with **Apply now**.
 - A contact waiting on a possible match can't be edited or deleted until you answer it in the review, so a change can't land on the wrong person.
-- Groups and photos can't be changed here yet, and other companies and locations are decided under **Details only Google can hold**.
+- Photos aren't changed here. Change one in any account, such as on an iPhone, and the sync offers it to the others. Other companies and locations are decided under **Details only Google can hold**.
 
 ## Where things are kept
 

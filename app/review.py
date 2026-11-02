@@ -7,7 +7,7 @@ from collections import Counter, defaultdict
 from urllib.parse import quote
 
 from . import base, check, plan, storage
-from .model import Contact
+from .model import Contact, fold
 from .settings import PRIVATE_DIR
 
 DECISIONS_FILE = PRIVATE_DIR / "decisions.json"
@@ -134,13 +134,15 @@ def save_edit(key: str, edit: dict) -> None:
     again, since entering a value is asking for it. An edit that changes nothing cancels any waiting."""
     def change(d):
         edits = d.setdefault("edits", {})
-        if edit["set"] or edit["lists"]:
+        if edit["set"] or edit["lists"] or edit.get("groups"):
             edits[key] = edit
         else:
             edits.pop(key, None)
         prefixes = tuple(f"{key}|field:{f}" for f in edit["set"]) + tuple(
             f"{key}|{f}{mark}" for f in edit["lists"] for mark in (":", "=", "~", "#", "@"))
-        d["skips"] = [i for i in d.get("skips", []) if not i.startswith(prefixes)]
+        groups = edit.get("groups") or {"from": [], "to": []}
+        changed = {f"group|{g}" for g in set(groups["from"]) ^ {fold(name) for name in groups["to"]}}
+        d["skips"] = [i for i in d.get("skips", []) if not i.startswith(prefixes) and i not in changed]
     _update(change)
 
 
@@ -215,7 +217,9 @@ def tidy(d: dict, review: dict) -> None:
         done = settled.get(key, {})
         left = {kind: {f: c for f, c in edit.get(kind, {}).items() if f not in done.get(kind, [])}
                 for kind in ("set", "lists")}
-        if key in people and (left["set"] or left["lists"]):
+        if edit.get("groups") and not done.get("groups"):
+            left["groups"] = edit["groups"]
+        if key in people and any(left.values()):
             edits[key] = left
     d["edits"] = edits
 

@@ -94,9 +94,8 @@ def contact_body(rv: dict | None, key: str) -> str:
     for field, title in LIST_TITLES.items():
         rows += "".join(value_row(f"{esc(label_text(i['label']))} · {title}", i) for i in lists[field])
     rows += "".join(value_row("Notes", i, " class='note-text'") for i in single["note"])
-    if view["groups"]:
-        rows += f"<tr><th>Groups</th><td>{esc(', '.join(view['groups']))}</td></tr>"
-    others = [e["text"] for e in view["extras"] if not e["current"]]
+    rows += "".join(value_row("Group", i) for i in view["now"]["groups"])
+    others =[e["text"] for e in view["extras"] if not e["current"]]
     if others:
         rows += ("<tr><th>Only in Google</th><td>" + esc("; ".join(others))
                  + " <a href='review'>Decide in the review</a></td></tr>")
@@ -163,6 +162,7 @@ def form_body(rv: dict | None, key: str = "", entered: dict | None = None, error
         f"<section class='card'><h2>Details</h2><div class='edit-grid'>{singles}</div></section>"
         f"<section class='card'><h2>Phone numbers, addresses and more</h2><p class='muted'>The first in each list is "
         f"the main one. Use the arrows to change the order.</p>{lists}</section>"
+        f"{_groups_section(rv, values['groups'])}"
         "<section class='card'><h2>Notes</h2><textarea name='note' rows='5'>"
         f"{esc(values['note'])}</textarea></section>"
         f"<div class='row'><button>{save}</button><a href='{back}'>Cancel</a></div></form><script>{_FORM_SCRIPT}</script>"
@@ -186,8 +186,29 @@ def _similar_warning(rv: dict, similar: tuple) -> str:
 
 
 def _empty() -> dict:
-    return {"name_parts": [""] * 5, "nickname": "", "company": "", "title": "", "birthday": "", "note": "",
+    return {"name_parts": [""] * 5, "nickname": "", "company": "", "title": "", "birthday": "", "note": "", "groups": [],
             "lists": {f: [] for f in LIST_TITLES}}
+
+
+def _groups_section(rv: dict, current: list[str]) -> str:
+    """A dropdown per group the person is in, each listing every group, with a last choice for a new one."""
+    body = "".join(_group_row(rv, g) for g in current)
+    return ("<section class='card'><h2>Groups</h2><p class='muted'>Removing someone from a group never deletes the "
+            f"group.</p><div class='edit-list' data-field='groups'>{body}</div><template id='row-groups'>{_group_row(rv, '')}"
+            "</template><div class='row'><button type='button' class='secondary add-row' data-field='groups'>Add a group"
+            "</button></div></section>")
+
+
+def _group_row(rv: dict, current: str) -> str:
+    choices = list(rv["group_names"])
+    if current and current.lower() not in {g.lower() for g in choices}:
+        choices.append(current)
+    options = "<option value=''>Choose a group</option>" + "".join(
+        f"<option value='{esc(g)}'{' selected' if g.lower() == current.lower() else ''}>{esc(g)}</option>" for g in choices)
+    return (f"<div class='edit-row'><span class='group-choice'><select class='label-pick' name='groups_name' autocomplete='off'>"
+            f"{options}<option value='{review.CUSTOM}'>New group…</option></select><input type='text' class='label-custom' "
+            "name='groups_new' autocomplete='off' maxlength='60' placeholder='Name of the new group' hidden></span>"
+            "<span class='row-buttons'><button type='button' class='secondary row-remove' title='Remove'>✕</button></span></div>")
 
 
 def _field(title: str, name: str, value: str, hint: str = "") -> str:
@@ -267,6 +288,13 @@ def read_form(form) -> tuple[dict, list[str]]:
                 seen.add(row["key"])
                 rows.append(row)
         entered["lists"][field] = rows
+    typed = form.getall("groups_new", [])
+    groups = {}
+    for i, name in enumerate(form.getall("groups_name", [])):
+        chosen = (str(typed[i]) if i < len(typed) else "") if name == review.CUSTOM else str(name)
+        if chosen := plan.tidy_text("company", chosen):
+            groups.setdefault(chosen.lower(), chosen)
+    entered["groups"] = list(groups.values())
     if not any(entered["name_parts"]) and not entered["company"]:
         errors.append("Enter a name or a company.")
     return entered, errors
@@ -318,7 +346,7 @@ def save(options: dict, key: str, form) -> dict:
     if view and not is_new:
         edit = plan.edit_from(view["baseline"], entered)
         review.save_edit(key, edit)
-        return {"key": key, "unchanged": not (edit["set"] or edit["lists"])}
+        return {"key": key, "unchanged": not (edit["set"] or edit["lists"] or edit.get("groups"))}
     found = plan.similar(rv, entered, key)
     if found and not form.get("confirmed"):
         return {"entered": entered, "errors": [], "similar": found}
@@ -360,7 +388,8 @@ document.addEventListener('click', e => {
     const field = add.dataset.field;
     const list = document.querySelector(`.edit-list[data-field="${field}"]`);
     list.appendChild(document.getElementById(`row-${field}`).content.cloneNode(true));
-    list.lastElementChild.querySelector('.value-box, textarea').focus();
+    const row = list.lastElementChild;
+    (row.querySelector('.value-box, textarea') || row.querySelector('select')).focus();
     return;
   }
   const row = e.target.closest('.edit-row');

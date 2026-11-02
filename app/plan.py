@@ -72,10 +72,12 @@ def build(contacts: list[Contact], accounts: list[dict], decisions: dict, base: 
     mass = {a for a, n in gone.items() if n > MASS_DELETION}
     keyed = _decision_keys(decisions)
     edits, deleting = decisions.get("edits", {}), set(decisions.get("deletes", []))
+    new_people = decisions.get("new_people", {})
 
     review = {"columns": list(names.values()), "suggestions": [], "conflicts": [], "people": [], "groups": [],
               "duplicates": [], "extras": [], "clusters": clusters, "sync": {"names": names, "people": {}, "groups": []},
               "directory": [], "views": {}, "pending": {}, "edit_settled": {},
+              "group_names": sorted(spelling.values(), key=fold),
               "warnings": [f"{gone[a]:,} contacts have gone from {names[a]} since the last sync, more than usual. "
                            "Deleting them from the other accounts waits until you tick each one, so check that "
                            "account first. Applying without ticking them leaves every account as it is, and "
@@ -131,8 +133,12 @@ def build(contacts: list[Contact], accounts: list[dict], decisions: dict, base: 
         if person.rows:
             review["people"].append({"key": key, "name": merged["display"], "rows": person.rows,
                                      "held": person.ops["held"]})
-    for key, entry in decisions.get("new_people", {}).items():
-        _new_person_row(review, key, entry, names, skips)
+    for key, entry in new_people.items():
+        _new_person_row(review, key, entry, names, skips, dropped, to_group, totals)
+    # A group named on the Contacts pages may not exist yet, so it goes by how it was typed.
+    typed = [g for edit in edits.values() for g in edit.get("groups", {}).get("to", [])]
+    typed += [g for entry in new_people.values() for g in entry.get("groups", [])]
+    spelling = {fold(g): g for g in typed} | spelling
     review["people"].sort(key=lambda p: fold(p["name"]))
     review["directory"].sort(key=lambda d: fold(d["name"]))
     review["groups"], review["sync"]["groups"] = _group_rows(
@@ -225,6 +231,9 @@ def edit_from(baseline: dict, entered: dict) -> dict:
         new = [(_exact(field, r["value"], r["parts"]), r["label"].lower()) for r in entered["lists"][field]]
         if old != new:
             edit["lists"][field] = {"from": [text for text, _ in old], "to": entered["lists"][field]}
+    old_groups = sorted(fold(g) for g in baseline["groups"])
+    if old_groups != sorted(fold(g) for g in entered["groups"]):
+        edit["groups"] = {"from": old_groups, "to": entered["groups"]}
     return edit
 
 
@@ -236,7 +245,7 @@ def new_person(entered: dict) -> dict:
     contact["set"] |= {f: entered[f] for f in CLEARABLE if entered[f]}
     contact["add"] = [{"field": f, **r} for f in MULTI for r in entered["lists"][f]]
     name = " ".join(filter(None, entered["name_parts"])) or entered["company"]
-    return {"name": name, "contact": contact}
+    return {"name": name, "contact": contact, "groups": entered["groups"]}
 
 
 def similar(review: dict, entered: dict, skip: str = "") -> list[dict]:
@@ -476,12 +485,13 @@ def _merge(key: str, members: list[Contact], picks: _Picks, names: dict, last: _
         order = _agreed_order([v.key for v in merged[field]], listed)
         if order:
             merged[field].sort(key=lambda v: order.index(v.key))
-    merged["edit"] = {"removed": {}, "kept": {}, "order": {}, "dropped": {"set": [], "lists": []}}
+    merged["groups"] = sorted({fold(g): g for c in members for g in c.groups}.values(), key=fold)
+    merged["edit"] = {"removed": {}, "kept": {}, "order": {}, "groups_left": set(), "groups_kept": set(),
+                      "dropped": {"set": [], "lists": [], "groups": False}}
     merged["baseline"] = _view(merged)
     _apply_edit(key, merged, conflicts, cleared, picks, edit or {})
     merged["view"] = _view(merged)
     merged["extras"] = _extra_details(key, members, merged, extras, cleared, names)
-    merged["groups"] = sorted({fold(g): g for c in members for g in c.groups}.values(), key=fold)
     merged["photo"], merged["photo_from"] = _merge_photo(key, members, picks, names, conflicts, last, cleared)
     merged["cleared"] = cleared
     merged["display"] = (merged["name"] or merged["company"]
@@ -492,7 +502,7 @@ def _merge(key: str, members: list[Contact], picks: _Picks, names: dict, last: _
 def _view(merged: dict) -> dict:
     """The person as the Contacts pages show them."""
     removed = merged["edit"]["removed"]
-    return {"name_parts": list(merged["name_parts"]), **{f: merged[f] for f in SINGLE},
+    return {"name_parts": list(merged["name_parts"]), **{f: merged[f] for f in SINGLE}, "groups": list(merged["groups"]),
             "lists": {f: [{"value": v.value, "label": v.label, "key": v.key, "parts": list(v.parts)}
                           for v in merged[f] if v.key not in removed.get(f, ())] for f in MULTI}}
 
@@ -515,8 +525,8 @@ def _directory_entry(key: str, view: dict, pending: str) -> dict:
             "held": view["held"], "pending": pending}
 
 
-def _new_person_row(review: dict, key: str, entry: dict, names: dict, skips: _Skips) -> None:
-    """A contact entered on the Contacts pages, which no account has yet."""
+def _new_person_row(review: dict, key: str, entry: dict, names: dict, skips: _Skips, dropped: set, to_group, totals) -> None:
+    """A contact entered on the Contacts pages, which no account has yet, and the groups they join."""
     cells = {name: [{"text": "Not in this account", "state": "add"}] for name in names.values()}
     row = _row(f"{key}|new", "Contact", cells, list(names), names,
                {"kind": "text", "value": "New contact in every account", "details": _new_details(entry["contact"])}, skips)
@@ -525,16 +535,24 @@ def _new_person_row(review: dict, key: str, entry: dict, names: dict, skips: _Sk
         "create": None if row["skipped"] else {"accounts": list(names), "contact": entry["contact"]}}
     review["people"].append({"key": key, "name": entry["name"], "rows": [row], "held": False})
     review["pending"][key] = "new"
+    groups = entry.get("groups", [])
+    if not row["skipped"]:
+        for g in {fold(g) for g in groups} - dropped:
+            totals[g] += 1
+            for a in names:
+                to_group[(a, g)].append({"person": key, "ref": "", "name": entry["name"]})
     s = entry["contact"]["set"]
     parts = s.get("name", [""] * 5)
     entered = {"name_parts": parts, "name": " ".join(filter(None, parts)), **{f: s.get(f, "") for f in CLEARABLE},
+               "groups": groups,
                "lists": {f: [{k: r[k] for k in ("value", "label", "key", "parts")} for r in entry["contact"]["add"]
                              if r["field"] == f] for f in MULTI}}
     # It's held nowhere yet, so what it'd hold stands in for what the accounts hold today.
     now = {"single": {f: [{"text": show_all(f, entered[f]), "accounts": []}] if entered[f] else [] for f in SINGLE},
+           "groups": [{"text": g, "accounts": []} for g in groups],
            "lists": {f: [{"text": _text(f, r["value"]), "label": r["label"], "key": r["key"], "accounts": []}
                          for r in entered["lists"][f]] for f in MULTI}}
-    view = {**entered, "display": entry["name"], "held": False, "new": True, "now": now, "baseline": None, "groups": [],
+    view = {**entered, "display": entry["name"], "held": False, "new": True, "now": now, "baseline": None,
             "photo": "", "extras": [], "in": [], "missing": list(names.values())}
     review["views"][key] = view
     review["directory"].append(_directory_entry(key, view, "new"))
@@ -580,6 +598,15 @@ def _apply_edit(key: str, merged: dict, conflicts: list[dict], cleared: dict, pi
         state["order"][field] = [v.key for v in written]
         merged[field] = written + [v for v in merged[field] if v.key not in keys]
         conflicts[:] = [c for c in conflicts if not c["id"].startswith(f"{key}|{field}#")]
+    if change := edit.get("groups"):
+        now = sorted(fold(g) for g in merged["groups"])
+        wanted = sorted({fold(g) for g in change["to"]})
+        spelled = {fold(g): g for g in [*merged["groups"], *change["to"]]}
+        shown = lambda folded, lookup=spelled: ", ".join(lookup[g] for g in folded) or "(none)"
+        if _edit_stands(key, "groups", "groups", "Groups", now, change["from"], wanted, state, picks, conflicts, shown):
+            state["groups_left"] = set(now) - set(wanted)
+            state["groups_kept"] = set(wanted)
+            merged["groups"] = sorted(change["to"], key=fold)
 
 
 def _edit_stands(key: str, kind: str, field: str, title: str, now, before, wanted, state: dict, picks: _Picks,
@@ -597,7 +624,10 @@ def _edit_stands(key: str, kind: str, field: str, title: str, now, before, wante
                       "options": [{"key": "edit", "value": values[0], "accounts": ["Your edit"]},
                                   {"key": "now", "value": values[1], "accounts": ["In the accounts now"]}]})
     if picked == "now":
-        state["dropped"][kind].append(field)
+        if kind == "groups":
+            state["dropped"]["groups"] = True
+        else:
+            state["dropped"][kind].append(field)
     return picked == "edit"
 
 
@@ -899,15 +929,23 @@ class _Person:
                         if self.names[a] not in item["accounts"]:
                             item["accounts"].append(self.names[a])
             lists[field] = sorted(found.values(), key=lambda item: rank.get(item["key"], len(rank)))
-        return {"single": single, "lists": lists}
+        groups = {}
+        for a, c in self.first.items():
+            for g in c.groups:
+                groups.setdefault(g, []).append(self.names[a])
+        return {"single": single, "lists": lists, "groups": [{"text": g, "accounts": sorted(held)} for g, held in
+                                                             sorted(groups.items(), key=lambda item: fold(item[0]))]}
 
     def settled(self, edit: dict) -> dict:
         """The fields of a pending edit that need nothing more: every account holds them, or you chose to keep
         what the accounts hold instead."""
         dropped = self.merged["edit"]["dropped"]
-        done = {"set": list(dropped["set"]), "lists": list(dropped["lists"])}
+        done = {"set": list(dropped["set"]), "lists": list(dropped["lists"]), "groups": dropped["groups"]}
         if self.missing:
             return done
+        if change := edit.get("groups"):
+            wanted = {fold(g) for g in change["to"]}
+            done["groups"] = done["groups"] or all({fold(g) for g in c.groups} == wanted for c in self.first.values())
         for field, change in edit.get("set", {}).items():
             if all((c.name() if field == "name" else getattr(c, field)) == change["to"] for c in self.first.values()):
                 done["set"].append(field)
@@ -923,7 +961,10 @@ class _Person:
         account took them out since the last apply."""
         mine = {a: {fold(g) for g in c.groups} for a, c in self.first.items()}
         left = {g for a, c in self.first.items() for g in self.last.groups(c) - mine[a] if g in have[a]}
-        for g in {fold(g) for g in self.merged["groups"]} - dropped:
+        # What you typed on the Contacts page decides, over a group an account left or joined by itself.
+        edit = self.merged["edit"]
+        left = (left - edit["groups_kept"]) | edit["groups_left"]
+        for g in ({fold(g) for g in self.merged["groups"]} | edit["groups_left"]) - dropped:
             if g in left:
                 for a in self.first:
                     if g in mine[a]:

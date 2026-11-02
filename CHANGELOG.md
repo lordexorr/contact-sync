@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.2
+
+- **Groups on the contact form:** add someone to any of your groups from a dropdown, or to a **New group…** created in every account, and take them out of one. This works when adding a new contact too. Removing someone never deletes the group, even if they were its last member. The **Apply** page names the groups they join and leave in each account, and nothing changes until you press **Apply now**.
+
 ## 0.4.1
 
 - **Label dropdowns on the contact form:** each label is a dropdown of the ones iCloud and Google both have, ending in **Custom…** to type your own, like the review. New rows start on a likely label, such as mobile for a phone.
