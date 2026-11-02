@@ -127,21 +127,43 @@ def _changed(person: dict, changes: dict) -> dict:
     for field, name in LISTS.items():
         removing = {r["key"] for r in changes["remove"] if r["field"] == field}
         relabel = {r["key"]: r["label"] for r in changes["relabel"] if r["field"] == field}
+        respell = {r["key"]: r for r in changes["respell"] if r["field"] == field}
         adding = [a for a in changes["add"] if a["field"] == field]
-        if not (removing or relabel or adding):
+        if not (removing or relabel or respell or adding):
             continue
+        current = own(name)
+        last = {_key(field, e): i for i, e in enumerate(current)}  # the one a repeated value keeps
         entries = []
-        for e in own(name):
-            v = _value(field, e)
-            key = v.key or fold(v.value)
-            if key in removing:
+        for i, e in enumerate(current):
+            key = _key(field, e)
+            if key in removing or (key in respell and i != last[key]):
                 continue
+            if key in respell:
+                e = _rewritten(field, e, respell[key])
             if key in relabel:
                 e.pop("formattedType", None)
                 e["type"] = google_type(relabel[key])
             entries.append(e)
         body[name] = entries + [_entry(field, a) for a in adding]
     return body
+
+
+def _key(field: str, entry: dict) -> str:
+    v = _value(field, entry)
+    return v.key or fold(v.value)
+
+
+def _rewritten(field: str, entry: dict, written: dict) -> dict:
+    """An entry holding a value as written, keeping its label and anything else on it. Google works out an
+    address's formatted text again from the parts, and its country code from a changed country."""
+    if field != "addresses":
+        name = "person" if field == "related" else "value"
+        return {**{k: v for k, v in entry.items() if k != "canonicalForm"}, name: written["value"]}
+    new = _entry(field, {**written, "label": ""})
+    gone = {"formattedValue", "streetAddress", "extendedAddress", "city", "region", "postalCode", "country"}
+    if new.get("country") != entry.get("country"):
+        gone.add("countryCode")
+    return {**{k: v for k, v in entry.items() if k not in gone}, **new}
 
 
 def _bare(entry: dict) -> dict:
@@ -192,6 +214,6 @@ def _value(field: str, entry: dict) -> Value:
         text = entry.get("formattedValue", "").replace("\n", ", ") or ", ".join(filter(None, parts))
         if not any(parts):  # typed as free text, which counts as the street, where it goes in another account
             street = parts[0] = text
-        return Value(text, tag, address_key(street, parts[1], parts[3]) if text else "", parts, odd)
+        return Value(text, tag, address_key(street, parts[1], parts[3], parts[2]) if text else "", parts, odd)
     value = entry.get("person" if field == "related" else "value", "")
     return Value(value, tag, _KEYS[field](value), odd=odd)

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.16
+
+Every account can now end up literally the same.
+
+- Values that differ only in how they're written now show as differences: capitals and punctuation in a name, nickname, company, job title or note, and any different wording of a phone number, email, address, website or related name, such as "NY" and "New York", "Rd" and "Road", or a country on one copy but not another. Pick the wording under **Different values**, and a **How this … is written** row applies it to every account. People are still matched the forgiving way, so this never splits anyone in two.
+- Stray spaces are removed without asking, and the row says "extra space".
+- A value listed more than once on a card is reduced to one, so every account holds it the same number of times.
+- An address with only a state or region now goes by it, with a US state's abbreviation counting as its name, so "NY" and "New York" are one address and "NY" and "MA" are two.
+
 ## 0.3.15
 
 - Fixed: a value picked in the review stayed picked for good, so it could undo a later edit: pick "Bobby", change it to "Rob" on a phone, and applying wrote "Bobby" back. A pick is now forgotten once the accounts agree, and a value that changes after you picked is asked about again. Label picks work the same way.

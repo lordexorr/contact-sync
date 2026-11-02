@@ -239,8 +239,8 @@ def _edits(person_ops: dict) -> bool:
 
 def _blank() -> dict:
     """An edit to one contact: fields to set ("" empties one), the photo ({"from": ref} or "clear"), and list
-    values to add, remove and relabel."""
-    return {"set": {}, "photo": None, "add": [], "remove": [], "relabel": []}
+    values to add, remove, relabel and respell (write as given, once, wherever the card has that value)."""
+    return {"set": {}, "photo": None, "add": [], "remove": [], "relabel": [], "respell": []}
 
 
 def _value_op(field: str, v: Value) -> dict:
@@ -321,10 +321,9 @@ def _merge(key: str, members: list[Contact], picks: dict, names: dict, last: _La
     for field, title in SINGLE.items():
         options = {}
         for c in members:
-            value = c.name() if field == "name" else getattr(c, field)
+            value = _compare_key(field, c.name() if field == "name" else getattr(c, field))
             if value:
-                option = options.setdefault(_compare_key(field, value), {"value": value, "contacts": []})
-                option["contacts"].append(c)
+                options.setdefault(value, {"value": value, "contacts": []})["contacts"].append(c)
         if field == "birthday":
             _settle_years(options)
         changed = {k for k, o in options.items() if any(last.changed(c, field, k) for c in o["contacts"])}
@@ -335,7 +334,8 @@ def _merge(key: str, members: list[Contact], picks: dict, names: dict, last: _La
         merged[field] = options[chosen]["value"] if chosen else ""
         if field == "name":
             source = _newest(options[chosen]["contacts"]) if chosen else None
-            merged["name_parts"] = ([source.prefix, source.given, source.middle, source.family, source.suffix]
+            merged["name_parts"] = ([_compare_key(field, p) for p in
+                                     (source.prefix, source.given, source.middle, source.family, source.suffix)]
                                     if source else [""] * 5)
         elif chosen and len(options) == 1 and chosen not in changed:
             emptied = [c.account for c in members if not getattr(c, field) and last.had(c, field, chosen)]
@@ -348,6 +348,13 @@ def _merge(key: str, members: list[Contact], picks: dict, names: dict, last: _La
             held = sorted({x.label.lower() for c in members for x in getattr(c, field) if (x.key or fold(x.value)) == v.key})
             merged["labels_held"][f"{field}~{v.key}"] = held
             v.label = picks.get(f"{key}|{field}~{v.key}", held) or v.label
+            # The accounts may hold the same value written differently. Every account ends up with one wording.
+            spellings = _spellings(field, v.key, members)
+            written = _choose(f"{key}|{field}#{v.key}", spellings, picks, set())
+            if len(spellings) > 1:
+                conflicts.append(_conflict(f"{key}|{field}#{v.key}", f"How this {MULTI[field]} is written", spellings,
+                                           written, names, picks, lambda o: {"value": o["value"]}))
+            v.value, v.parts = spellings[written]["value"], spellings[written]["parts"]
     merged["groups"] = sorted({fold(g): g for c in members for g in c.groups}.values(), key=fold)
     merged["photo"], merged["photo_from"] = _merge_photo(key, members, picks, names, conflicts, last, cleared)
     merged["cleared"] = cleared
@@ -357,12 +364,49 @@ def _merge(key: str, members: list[Contact], picks: dict, names: dict, last: _La
 
 
 def _compare_key(field: str, value: str) -> str:
-    return value if field == "birthday" else fold(value)
+    """A value as every account should hold it, exactly as written apart from stray spaces. Two values differ
+    if these do, even by capitals or punctuation, so every account ends up literally the same."""
+    if field == "birthday":
+        return value
+    return "\n".join((value or "").splitlines()).strip() if field == "note" else " ".join((value or "").split())
 
 
 def _matches(field: str, value: str, key: str) -> bool:
     """Whether a value is the one an option's key stands for."""
-    return _same_birthday(value, key) if field == "birthday" else fold(value) == key
+    return _same_birthday(value, key) if field == "birthday" else _compare_key(field, value) == key
+
+
+def _shown(field: str, value: str) -> str:
+    """A value as an account holds it now, saying so if stray spaces are all that's wrong with it."""
+    tidy = _compare_key(field, value)
+    return f"{show(field, tidy)} (extra space)" if value != tidy else show(field, value)
+
+
+def _spellings(field: str, key: str, members: list[Contact]) -> dict:
+    """The ways the accounts write the list value with this key: {exact text: {"value", "parts", "contacts"}}."""
+    options = {}
+    for c in members:
+        for x in getattr(c, field):
+            if (x.key or fold(x.value)) == key:
+                parts = [p.strip() for p in x.parts]
+                value = _address_text(parts) if field == "addresses" else x.value.strip()
+                option = options.setdefault(_exact(field, value, parts), {"value": value, "parts": parts, "contacts": []})
+                option["contacts"].append(c)
+    return options
+
+
+def _exact(field: str, value: str, parts: list[str]) -> str:
+    """A list value's exact text. An address goes by its parts: Google words its own version of the same parts
+    differently from iCloud, and that isn't something either account holds."""
+    if field != "addresses":
+        return value
+    return "\n".join(p.replace("\n", ", ") for p in (list(parts) + [""] * 5)[:5])
+
+
+def _address_text(parts: list[str]) -> str:
+    street, city, region, postcode, country = (list(parts) + [""] * 5)[:5]
+    line = " ".join(filter(None, (region, postcode)))
+    return ", ".join(filter(None, (street.replace("\n", ", "), city, line, country)))
 
 
 def _same_birthday(a: str, b: str) -> bool:
@@ -521,8 +565,10 @@ class _Person:
         self._photo_row()
         for field, noun in MULTI.items():
             self._list_rows(field, noun)
+            self._written_rows(field, noun)
         self.ops["update"] = {a: {"ref": self.first[a].ref, **e} for a, e in self.edits.items()
-                              if e["set"] or e["photo"] or e["add"] or e["remove"] or e["relabel"] or e.get("carry")}
+                              if e["set"] or e["photo"] or e["add"] or e["remove"] or e["relabel"] or e["respell"]
+                              or e.get("carry")}
 
     def memberships(self, have: dict, dropped: set, to_group, from_group, totals) -> None:
         """Note the groups the person joins in each account, and the ones they leave everywhere because an
@@ -605,15 +651,14 @@ class _Person:
                          else [_DELETED] if a in cleared[field] else [{"text": "—"}] for a, old in have.items()}
                 after, value = {"kind": "text", "value": "Removed from every account"}, ""
             elif new:
-                changing = [a for a, old in have.items()
-                            if (old != new if field == "birthday" else fold(old) != fold(new))]
-                cells = {self.names[a]: _now(show(field, old), show(field, new), a in changing)
+                changing = [a for a, old in have.items() if old != new]
+                cells = {self.names[a]: _now(_shown(field, old), show(field, new), a in changing)
                          for a, old in have.items()}
                 after = {"kind": "text", "value": show(field, new)}
                 value = self.merged["name_parts"] if field == "name" else new
             else:
                 continue
-            basis = sorted([a, fold(old)] for a, old in have.items())
+            basis = sorted([a, old] for a, old in have.items())
             if changing and not self._row(f"{self.key}|field:{field}", title, cells, changing, after, basis=basis)["skipped"]:
                 for a in changing:
                     self.edits[a]["set"][field] = value
@@ -696,6 +741,30 @@ class _Person:
                     elif v.key not in kept and v.key in held[a]:
                         self.edits[a]["remove"].append({"field": field, "key": v.key, "value": held[a][v.key].value})
 
+    def _written_rows(self, field: str, noun: str) -> None:
+        """A row for each value an account holds written differently from how every account will, or more than
+        once, so every account ends up with the same text once."""
+        for v in self.merged[field]:
+            if not self._kept(field, v):
+                continue
+            target = _exact(field, v.value, v.parts)
+            lines = {a: [x for x in getattr(c, field) if (x.key or fold(x.value)) == v.key] for a, c in self.first.items()}
+            exact = {a: [_exact(field, x.value, x.parts) for x in xs] for a, xs in lines.items()}
+            changing = [a for a, texts in exact.items() if texts and texts != [target]]
+            if not changing:
+                continue
+            cells = {}
+            for a, xs in lines.items():
+                if a in changing:
+                    cells[self.names[a]] = _now(_as_written(field, xs), v.value, True)
+                else:
+                    cells[self.names[a]] = [{"text": v.value if xs else "—"}]
+            row = self._row(f"{self.key}|{field}#{v.key}", f"How this {noun} is written", cells, changing,
+                            {"kind": "text", "value": v.value}, basis=sorted([a, texts] for a, texts in exact.items()))
+            if not row["skipped"]:
+                for a in changing:
+                    self.edits[a]["respell"].append({"field": field, "key": v.key, "value": v.value, "parts": list(v.parts)})
+
     def _kept(self, field: str, v: Value) -> bool:
         """Whether every account ends up with this value: unless it's unticked, or an account deleted it since
         the last apply and it wasn't ticked again."""
@@ -708,6 +777,16 @@ class _Person:
     def _deleted_note(self, field: str, key: str) -> str:
         by = self._deleted_by(field, key)
         return f"Deleted from {', '.join(self.names[a] for a in by)} since the last sync" if by else ""
+
+
+def _as_written(field: str, values: list[Value]) -> str:
+    """How an account writes a value now, saying so if it's there more than once or has stray spaces."""
+    texts = [_address_text(v.parts) if field == "addresses" else v.value for v in values]
+    tidy = list(dict.fromkeys(" ".join(t.split()) for t in texts))
+    notes = [f"listed {len(values)} times"] if len(values) > 1 else []
+    if any(t != " ".join(t.split()) for t in texts) or any(p != p.strip() for v in values for p in v.parts):
+        notes.append("extra space")
+    return "; ".join(tidy) + (f" ({', '.join(notes)})" if notes else "")
 
 
 def _detail_count(c: Contact) -> int:

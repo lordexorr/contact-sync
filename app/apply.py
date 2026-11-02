@@ -380,7 +380,7 @@ class _Writer:
     def _update(self, account: str, edit: dict) -> str:
         edit, photo, note = self._photo_for(edit)
         if note and not (edit["set"] or edit["photo"] or edit["add"] or edit["remove"] or edit["relabel"]
-                         or edit.get("carry")):
+                         or edit["respell"] or edit.get("carry")):
             raise _NotMade(note)
         cid = edit["ref"].partition("|")[2]
         carry = [r.partition("|")[2] for r in edit.get("carry", [])]
@@ -514,6 +514,8 @@ def describe(edit: dict) -> str:
         parts += [f"{_count(n, plan.MULTI[f])} {verb}" for f, n in Counter(v["field"] for v in edit[kind]).items()]
     if edit["relabel"]:
         parts.append(f"{_count(len(edit['relabel']), 'label')} changed")
+    if edit["respell"]:
+        parts.append(f"{_count(len(edit['respell']), 'value')} rewritten")
     if edit.get("carry"):
         parts.append(f"details of {_count(len(edit['carry']), 'duplicate card')} moved here")
     text = ", ".join(parts) or "updated"

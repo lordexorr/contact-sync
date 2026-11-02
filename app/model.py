@@ -21,6 +21,17 @@ _STREET_WORDS = {
     "place": "pl", "terrace": "ter", "highway": "hwy", "route": "rte", "parkway": "pkwy", "circle": "cir",
     "north": "n", "south": "s", "east": "e", "west": "w", "apartment": "apt", "suite": "ste",
 }
+_US_STATES = {
+    "al": "alabama", "ak": "alaska", "az": "arizona", "ar": "arkansas", "ca": "california", "co": "colorado",
+    "ct": "connecticut", "de": "delaware", "dc": "district of columbia", "fl": "florida", "ga": "georgia",
+    "hi": "hawaii", "id": "idaho", "il": "illinois", "in": "indiana", "ia": "iowa", "ks": "kansas", "ky": "kentucky",
+    "la": "louisiana", "me": "maine", "md": "maryland", "ma": "massachusetts", "mi": "michigan", "mn": "minnesota",
+    "ms": "mississippi", "mo": "missouri", "mt": "montana", "ne": "nebraska", "nv": "nevada", "nh": "new hampshire",
+    "nj": "new jersey", "nm": "new mexico", "ny": "new york", "nc": "north carolina", "nd": "north dakota",
+    "oh": "ohio", "ok": "oklahoma", "or": "oregon", "pa": "pennsylvania", "ri": "rhode island",
+    "sc": "south carolina", "sd": "south dakota", "tn": "tennessee", "tx": "texas", "ut": "utah", "vt": "vermont",
+    "va": "virginia", "wa": "washington", "wv": "west virginia", "wi": "wisconsin", "wy": "wyoming",
+}
 
 
 @dataclass
@@ -106,10 +117,14 @@ def url_key(value: str) -> str:
     return re.sub(r"^www\.", "", value).rstrip("/")
 
 
-def address_key(street: str, city: str, postcode: str) -> str:
+def address_key(street: str, city: str, postcode: str, region: str = "") -> str:
+    """How addresses compare, to tell which is which. One with only a state or region goes by that, a US state's
+    abbreviation counting as its name, so "NY" and "New York" are one address written two ways."""
     words = [_STREET_WORDS.get(w, w) for w in fold(street).split()]
-    zip5 = re.sub(r"\D", "", postcode or "")[:5]
-    return f"{' '.join(words)}|{zip5 or fold(city)}"
+    place = re.sub(r"\D", "", postcode or "")[:5] or fold(city)
+    if not words and not place:
+        return f"{_US_STATES.get(fold(region), fold(region))}|"
+    return f"{' '.join(words)}|{place}"
 
 
 def label(raw: str) -> tuple[str, bool]:

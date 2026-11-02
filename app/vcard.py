@@ -143,7 +143,7 @@ def _list_value(name: str, raw: str, tag: str = "", odd: bool = False) -> Value 
     text = ", ".join(filter(None, (street.replace("\n", ", "), city, line, country)))
     if not text:
         return None
-    return Value(text, tag, address_key(street, city, postcode), [street, city, region, postcode, country], odd)
+    return Value(text, tag, address_key(street, city, postcode, region), [street, city, region, postcode, country], odd)
 
 
 def _type_label(types: list[str]) -> str:
@@ -363,30 +363,41 @@ def _set(card: _Card, field: str, value) -> None:
 
 
 def _edit_lists(card: _Card, changes: dict) -> None:
-    """Remove and relabel list values. Each is found against the card as it is, then the card is rebuilt once."""
+    """Remove, relabel and respell list values. Each is found against the card as it is, then the card is rebuilt
+    once. A respelled value that's on the card more than once keeps only its last line."""
     removing = {(r["field"], r["key"]) for r in changes["remove"]}
     relabel = {(r["field"], r["key"]): r["label"] for r in changes["relabel"]}
-    if not removing and not relabel:
+    respell = {(r["field"], r["key"]): r for r in changes["respell"]}
+    if not removing and not relabel and not respell:
         return
     next_item = card.next_item()
-    gone_lines, gone_groups, rewritten = set(), set(), {}
+    last = {}
+    for i, _, name, _, raw in card.props():
+        if name in _FIELDS and (v := _list_value(name, raw)):
+            last[(_FIELDS[name], v.key or fold(v.value))] = i
+    gone_lines, gone_groups, rewritten, relabelled = set(), set(), {}, set()
     for i, group, name, params, raw in card.props():
         if name not in _FIELDS or not (v := _list_value(name, raw)):
             continue
         key = (_FIELDS[name], v.key or fold(v.value))
-        if key in removing:
+        if key in removing or (key in respell and i != last[key]):
             # Apple keeps each labelled value in its own itemN group, with its label lines; they go together.
             if group:
                 gone_groups.add(group.lower())
             else:
                 gone_lines.add(i)
-        elif key in relabel:
+            continue
+        written = _raw_value(name, respell[key], raw) if key in respell else raw
+        if key in relabel:
             types, ablabel = _label(name, relabel[key])
             kept = [t for t in params.get("TYPE", []) if t.lower() not in _LABEL_TYPES]
             if ablabel and not group:
                 group, next_item = f"item{next_item}", next_item + 1
-            rewritten[i] = (_head(group, name, {**params, "TYPE": _unique(kept + types)}) + ":" + raw, group, ablabel)
-    relabelled = {group.lower() for _, group, _ in rewritten.values() if group}
+            rewritten[i] = (_head(group, name, {**params, "TYPE": _unique(kept + types)}) + ":" + written, group, ablabel)
+            if group:
+                relabelled.add(group.lower())
+        elif written != raw:
+            rewritten[i] = (card.lines[i][:_LINE.match(card.lines[i]).start("value")] + written, group, "")
     lines = []
     for i, line in enumerate(card.lines):
         m = _LINE.match(line)
@@ -436,17 +447,21 @@ def _add(card: _Card, value: dict) -> None:
     name = _PROPS[value["field"]]
     types, ablabel = _label(name, value["label"])
     group = f"item{card.next_item()}" if ablabel else ""
-    if name == "ADR":
-        parts = (list(value["parts"]) + [""] * 5)[:5]  # street, city, region, postcode, country
-        raw = ";".join(["", ""] + [_esc(p) for p in parts])
-    elif name == "X-ABRELATEDNAMES":
-        raw = _esc(value["value"])
-    else:
-        raw = " ".join(value["value"].splitlines())
-    lines = [_head(group, name, {"TYPE": types}) + ":" + raw]
+    lines = [_head(group, name, {"TYPE": types}) + ":" + _raw_value(name, value)]
     if ablabel:
         lines.append(f"{group}.X-ABLabel:{_esc(ablabel)}")
     card.insert(*lines)
+
+
+def _raw_value(name: str, value: dict, raw: str = "") -> str:
+    """A list value as its vCard line writes it. An address replacing raw keeps what comes before the street."""
+    if name == "ADR":
+        parts = (list(value["parts"]) + [""] * 5)[:5]  # street, city, region, postcode, country
+        before = (re.split(r"(?<!\\);", raw)[:2] + ["", ""])[:2] if raw else ["", ""]
+        return ";".join(before + [_esc(p) for p in parts])
+    if name == "X-ABRELATEDNAMES":
+        return _esc(value["value"])
+    return " ".join(value["value"].splitlines())
 
 
 def _label(name: str, value_label: str) -> tuple[list[str], str]:
