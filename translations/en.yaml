@@ -18,8 +18,10 @@ configuration:
       client_secret:
         name: Client secret
   icloud_accounts:
-    name: iCloud accounts
-    description: One entry per iCloud account. Create its app-specific password for Contact Sync at account.apple.com.
+    name: iCloud accounts (moved)
+    description: >-
+      iCloud accounts are now added on the Contact Sync page. Any listed here were moved there the first
+      time version 0.3.8 started, so you can delete them from here.
     fields:
       label:
         name: Label

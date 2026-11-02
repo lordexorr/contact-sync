@@ -8,7 +8,10 @@ from zoneinfo import ZoneInfo
 
 from aiohttp import web
 
+import requests
+
 from . import apply, check, google, notify, photos, review
+from .icloud import ICloudError
 from .settings import load_options
 
 log = logging.getLogger("contact_sync")
@@ -276,6 +279,33 @@ async def google_finish(request: web.Request) -> web.Response:
     raise go_to(request)
 
 
+async def icloud_add(request: web.Request) -> web.Response:
+    state = request.app[STATE]
+    form = await request.post()
+    account = {key: str(form.get(key, "")).strip() for key in ("label", "apple_id", "app_password")}
+    account["label"] = account["label"] or "iCloud"
+    if not account["apple_id"] or not account["app_password"]:
+        state.flash = ("error", "Enter the Apple ID and its app-specific password.")
+        raise go_to(request)
+    try:
+        await asyncio.to_thread(check.test_icloud_account, account)
+    except ICloudError as err:
+        state.flash = ("error", f"Couldn't add {account['apple_id']}: {err}")
+    except requests.RequestException as err:
+        state.flash = ("error", f"Couldn't reach iCloud to check {account['apple_id']}: {err}")
+    else:
+        await asyncio.to_thread(check.save_icloud_account, account)
+        state.flash = ("ok", f"Added {account['label']}. Press Check now to read its contacts.")
+    raise go_to(request)
+
+
+async def icloud_remove(request: web.Request) -> web.Response:
+    apple_id = str((await request.post()).get("apple_id", ""))
+    await asyncio.to_thread(check.remove_icloud_account, apple_id)
+    request.app[STATE].flash = ("ok", f"Removed {apple_id} and deleted its saved contacts.")
+    raise go_to(request)
+
+
 async def google_cancel(request: web.Request) -> web.Response:
     request.app[STATE].google_sign_in = None
     raise go_to(request)
@@ -361,16 +391,25 @@ def account_row(a: dict) -> str:
 
 
 def icloud_card(state: State) -> str:
-    # iCloud accounts are set on the Configuration tab, where their passwords live, so this only lists them.
     accounts = "".join(
-        f"<li class='row'><span>{esc(a['label'] or 'iCloud')}</span>"
-        f"<span class='muted'>{esc(a['apple_id'] or 'No Apple ID entered')}</span></li>"
-        for a in state.options["icloud_accounts"]
+        f"<li class='row'><span>{esc(a['label'])} <span class='muted'>{esc(a['apple_id'])}</span></span>"
+        "<form method='post' action='icloud/remove'>"
+        f"<input type='hidden' name='apple_id' value='{esc(a['apple_id'])}'>"
+        "<button class='secondary'>Remove</button></form></li>"
+        for a in check.icloud_accounts()
     ) or "<li class='muted'>None added yet.</li>"
     return (
         f"<section class='card'><h2>iCloud accounts</h2><ul class='plain'>{accounts}</ul>"
-        "<p class='muted'>Add, change or remove iCloud accounts on the add-on's Configuration tab, "
-        "then restart the add-on.</p></section>"
+        "<form method='post' action='icloud/add' class='stack' onsubmit=\"this.querySelector('button').disabled=true\">"
+        "<label>Label <span class='muted'>(any name you like, shown on this page)</span>"
+        "<input type='text' name='label' autocomplete='off' placeholder='iCloud'></label>"
+        "<label>Apple ID<input type='text' name='apple_id' required autocomplete='off'></label>"
+        "<label>App-specific password <span class='muted'>(create one at account.apple.com, under "
+        "Sign-In and Security → App-Specific Passwords)</span>"
+        "<input type='password' name='app_password' required autocomplete='new-password' "
+        "placeholder='abcd-efgh-ijkl-mnop'></label>"
+        "<div class='row'><button>Add an iCloud account</button></div></form>"
+        "<p class='muted'>To change an account's password, add it again with the new one.</p></section>"
     )
 
 
@@ -437,7 +476,9 @@ button,a.button{display:inline-block;font:inherit;text-decoration:none;padding:8
 button.secondary,a.button.secondary{background:transparent;color:var(--accent)}
 code{font-size:13px;overflow-wrap:anywhere}
 button:disabled{opacity:.6;cursor:default}
-input[type=text]{width:100%;font:inherit;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text)}
+input[type=text],input[type=password]{width:100%;font:inherit;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text)}
+form.stack label{display:block;margin-top:10px}
+form.stack input{margin-top:4px}
 .flash{margin:16px 0;padding:10px 14px;border:1px solid var(--line);border-radius:8px;background:var(--card)}
 .flash.ok{border-color:var(--ok)}
 .flash.error{border-color:var(--bad)}
@@ -476,7 +517,9 @@ label.value{display:block}
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     app = web.Application(middlewares=[ingress_only])
-    app[STATE] = State(load_options(), home_tz())
+    options = load_options()
+    check.move_icloud_accounts(options["icloud_accounts"])  # earlier versions kept them on the Configuration tab
+    app[STATE] = State(options, home_tz())
     app.add_routes([
         web.get("/", index),
         web.post("/check", check_now),
@@ -491,6 +534,8 @@ def main() -> None:
         web.post("/apply", apply_start),
         web.get("/result", result_page),
         web.get(r"/thumb/{name:[0-9a-f]+\.jpg}", thumb),
+        web.post("/icloud/add", icloud_add),
+        web.post("/icloud/remove", icloud_remove),
         web.post("/google/start", google_start),
         web.post("/google/finish", google_finish),
         web.post("/google/cancel", google_cancel),

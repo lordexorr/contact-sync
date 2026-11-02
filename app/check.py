@@ -19,12 +19,13 @@ log = logging.getLogger(__name__)
 STATUS_FILE = PRIVATE_DIR / "status.json"
 RECORDS_FILE = PRIVATE_DIR / "records.json"
 GOOGLE_ACCOUNTS_FILE = PRIVATE_DIR / "google_accounts.json"
+ICLOUD_ACCOUNTS_FILE = PRIVATE_DIR / "icloud_accounts.json"
 SNAPSHOT_DIR = SHARED_DIR / "snapshots"
 
 check_lock = threading.Lock()  # one check, or one apply, at a time
-# Guards the Google account list, the snapshots, status.json and records.json. It's only held for quick
-# file work, so connecting or disconnecting never waits for a check, and a check can still tell that an
-# account was disconnected while it was being read.
+# Guards the account lists, the snapshots, status.json and records.json. It's only held for quick file work,
+# so adding or removing an account never waits for a check, and a check can still tell that an account was
+# removed while it was being read.
 _state_lock = threading.Lock()
 
 
@@ -49,24 +50,74 @@ def save_google_account(account: dict) -> None:
 
 def remove_google_account(email: str) -> None:
     """Forget the account, delete what was saved from it, and cancel its sign-in at Google."""
-    key = f"google:{email}"
     with _state_lock:
         accounts = google_accounts()
         storage.write_json(GOOGLE_ACCOUNTS_FILE, [a for a in accounts if a["email"] != email])
-        _snapshot_path(f"google-{email}").unlink(missing_ok=True)
-        status = load_status()
-        if status:
-            status["accounts"] = [r for r in status["accounts"] if not _is_google(r, email)]
-            storage.write_json(STATUS_FILE, status)
-        records = load_records()
-        if records:
-            records["accounts"] = [a for a in records["accounts"] if a["key"] != key]
-            records["contacts"] = [c for c in records["contacts"] if c["account"] != key]
-            storage.write_json(RECORDS_FILE, records)
-        base.forget(key)
+        _forget("google", email)
     for account in accounts:
         if account["email"] == email:
             revoke(account["refresh_token"])
+
+
+def icloud_accounts() -> list[dict]:
+    """Each iCloud account as {"label", "apple_id", "app_password"}."""
+    return storage.read_json(ICLOUD_ACCOUNTS_FILE, [])
+
+
+def test_icloud_account(account: dict) -> None:
+    """Sign in and find the address book; raises ICloudError (or a connection error) if that fails."""
+    with ICloudAddressBook(account["apple_id"], account["app_password"]) as book:
+        book.fetch([])
+
+
+def save_icloud_account(account: dict) -> None:
+    """Add the account, or update the label and password of the one with the same Apple ID. That one keeps
+    its Apple ID as first typed, which is what everything saved from it is filed under."""
+    with _state_lock:
+        accounts = icloud_accounts()
+        at = next((i for i, a in enumerate(accounts) if a["apple_id"].lower() == account["apple_id"].lower()), None)
+        if at is None:
+            accounts.append(account)
+        else:
+            accounts[at] = {**account, "apple_id": accounts[at]["apple_id"]}
+        storage.write_json(ICLOUD_ACCOUNTS_FILE, accounts)
+
+
+def remove_icloud_account(apple_id: str) -> None:
+    """Forget the account and delete what was saved from it."""
+    with _state_lock:
+        storage.write_json(ICLOUD_ACCOUNTS_FILE, [a for a in icloud_accounts() if a["apple_id"] != apple_id])
+        _forget("icloud", apple_id)
+
+
+def move_icloud_accounts(configured: list[dict]) -> None:
+    """Once only: take over the iCloud accounts set on the Configuration tab by earlier versions."""
+    with _state_lock:
+        if not ICLOUD_ACCOUNTS_FILE.exists():
+            storage.write_json(ICLOUD_ACCOUNTS_FILE, [
+                {"label": a["label"] or "iCloud", "apple_id": a["apple_id"], "app_password": a["app_password"]}
+                for a in configured if a["apple_id"] and a["app_password"]])
+
+
+def _forget(service: str, login: str) -> None:
+    """Delete everything saved from an account that's been removed. The caller holds _state_lock."""
+    key = f"{service}:{login}"
+    _snapshot_path(f"{service}-{login}").unlink(missing_ok=True)
+    status = load_status()
+    if status:
+        status["accounts"] = [r for r in status["accounts"] if f"{r['service'].lower()}:{r['login']}" != key]
+        storage.write_json(STATUS_FILE, status)
+    records = load_records()
+    if records:
+        records["accounts"] = [a for a in records["accounts"] if a["key"] != key]
+        records["contacts"] = [c for c in records["contacts"] if c["account"] != key]
+        storage.write_json(RECORDS_FILE, records)
+    base.forget(key)
+
+
+def _connected() -> set[str]:
+    return ({f"icloud:{a['apple_id']}" for a in icloud_accounts()}
+            | {f"google:{a['email']}" for a in google_accounts()})
 
 
 class _Run:
@@ -91,16 +142,16 @@ def read_accounts(options: dict) -> _Run:
     """Read every account, save a snapshot and the contacts of each, and record counts and errors.
     The caller holds check_lock."""
     run = _Run()
-    results = [_check_icloud(a, run) for a in options["icloud_accounts"]]
+    results = [_check_icloud(a, run) for a in icloud_accounts()]
     results += [_check_google(a, options, run) for a in google_accounts()]
     with _state_lock:
-        connected = {f"google:{a['email']}" for a in google_accounts()}
+        connected = _connected()
 
-        def kept(key: str) -> bool:  # an account disconnected while it was being read stays out
-            return not key.startswith("google:") or key in connected
+        def kept(key: str) -> bool:  # an account removed while it was being read stays out
+            return key in connected
 
         checked_at = datetime.now(timezone.utc).isoformat()
-        results = [r for r in results if r["service"] != "Google" or kept(f"google:{r['login']}")]
+        results = [r for r in results if kept(f"{r['service'].lower()}:{r['login']}")]
         storage.write_json(STATUS_FILE, {"checked_at": checked_at, "accounts": results})
         storage.write_json(RECORDS_FILE, {
             "checked_at": checked_at,
@@ -127,9 +178,7 @@ def read_some(options: dict, refs: list[str], new_groups: dict[str, list[str]] |
         account, _, cid = ref.partition("|")
         wanted[account].append(cid)
     run = _Run()
-    for a in options["icloud_accounts"]:
-        if not a["apple_id"] or not a["app_password"]:
-            continue
+    for a in icloud_accounts():
         try:
             _read_some_icloud(a, wanted[f"icloud:{a['apple_id']}"], new_groups or {}, run)
         except Exception as err:
@@ -235,7 +284,9 @@ def _check_icloud(account: dict, run: _Run) -> dict:
                     if c.id in photo_refs:
                         c.photo = run.fingerprints.get(photo_refs[c.id], book.fetch_photo)
             row["contacts"], row["groups"] = len(contacts), len(groups)
-            run.saved.add(_save_snapshot(f"icloud-{account['apple_id']}", items))
+            with _state_lock:  # an account removed while it was being read isn't saved again
+                if key in _connected():
+                    run.saved.add(_save_snapshot(f"icloud-{account['apple_id']}", items))
             run.accounts.append({"key": key, "name": row["name"], "groups": groups})
             run.contacts += [c.to_dict() for c in contacts]
             run.raw[key] = {"book": book.book, "items": items, "photos": photo_refs}
@@ -282,10 +333,6 @@ def _describe(err: Exception, service: str) -> str:
         return f"Couldn't reach {service}: {err}"
     log.exception("Unexpected error while reading %s", service)
     return f"Unexpected error ({type(err).__name__}: {err}). Details are in the add-on's log."
-
-
-def _is_google(row: dict, email: str) -> bool:
-    return row["service"] == "Google" and row["login"] == email
 
 
 def _snapshot_path(name: str) -> Path:

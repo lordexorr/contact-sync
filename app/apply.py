@@ -177,7 +177,7 @@ class _Accounts:
         if key not in self._open:
             service, _, login = key.partition(":")
             if service == "icloud":
-                a = next(a for a in self.options["icloud_accounts"] if a["apple_id"] == login)
+                a = next(a for a in check.icloud_accounts() if a["apple_id"] == login)
                 conn = ICloudAddressBook(a["apple_id"], a["app_password"], self.raw[key]["book"])
             else:
                 a = next(a for a in check.google_accounts() if a["email"] == login)

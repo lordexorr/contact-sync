@@ -10,7 +10,7 @@ Keeps contacts in sync across any number of iCloud and Google accounts, as one c
 2. **Sign-In and Security → App-Specific Passwords**: create one named "Contact Sync".
 3. Copy it. It looks like `abcd-efgh-ijkl-mnop`.
 
-Changing an Apple ID's main password revokes its app-specific passwords. If that happens, create a new one and update the Configuration tab.
+Changing an Apple ID's main password revokes its app-specific passwords. If that happens, create a new one and add the account again on the Contact Sync page with it.
 
 ### 2. Google OAuth client (once, shared by every Google account)
 
@@ -28,11 +28,15 @@ Changing an Apple ID's main password revokes its app-specific passwords. If that
 
 ### 3. Configure the add-on
 
-On the **Configuration** tab, open the **Google** section and enter the client ID and secret. Under **iCloud accounts**, press **Add** for each iCloud account and enter a label of your choice (shown on the Contact Sync page), its Apple ID, and its app-specific password. Save, then restart the add-on. On the **Info** tab, turn on **Show in sidebar**.
+On the **Configuration** tab, open the **Google** section and enter the client ID and secret. Save, then restart the add-on. On the **Info** tab, turn on **Show in sidebar**.
 
 Optionally, set **Daily notification** to a notify entity or service, such as `notify.mobile_app_my_phone` or an email notifier. After each daily check it sends a message when changes are waiting or an account couldn't be read, and nothing otherwise.
 
-### 4. Connect each Google account
+### 4. Add each iCloud account
+
+Open **Contact Sync** in the sidebar. Under **iCloud accounts**, enter a label of your choice (shown on the page), the Apple ID, and its app-specific password, then press **Add an iCloud account**. Contact Sync signs in straight away, so a wrong Apple ID or password shows up at once. Repeat for each iCloud account. To change an account's password, add it again with the new one; **Remove** forgets an account and deletes what was saved from it.
+
+### 5. Connect each Google account
 
 Use a computer for this. The copy-and-paste step is awkward on a phone.
 
@@ -105,8 +109,8 @@ Importing a `.vcf` file adds its contacts as new ones, next to any already there
 
 | What | Where |
 |---|---|
-| Apple app-specific passwords, Google client ID and secret | The add-on's Configuration tab |
-| Google sign-ins, last check results, your review decisions, the record of the last apply | The add-on's private storage |
+| Google client ID and secret | The add-on's Configuration tab |
+| iCloud accounts and their app-specific passwords, Google sign-ins, last check results, your review decisions, the record of the last apply | The add-on's private storage |
 | Raw contact snapshots from the latest check | `addon_configs/local_contact_sync/snapshots` on the Samba share |
 | Backups made before each apply | `addon_configs/local_contact_sync/backups` on the Samba share |
 

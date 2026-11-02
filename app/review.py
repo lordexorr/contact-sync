@@ -20,7 +20,7 @@ def current_records(options: dict) -> tuple[list[Contact], list[dict]] | None:
     records = check.load_records()
     if not records:
         return None
-    active = {f"icloud:{a['apple_id']}" for a in options["icloud_accounts"] if a["apple_id"] and a["app_password"]}
+    active = {f"icloud:{a['apple_id']}" for a in check.icloud_accounts()}
     active |= {f"google:{a['email']}" for a in check.google_accounts()}
     accounts = [a for a in records["accounts"] if a["key"] in active]
     return [Contact.from_dict(c) for c in records["contacts"]], accounts

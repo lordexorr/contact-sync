@@ -85,12 +85,9 @@ def _detail_keys(c: Contact) -> set[str]:
 
 
 def _name_key(c: Contact) -> str:
-    # A first or last name alone counts too: a business typed in as a first name has nothing else to match by.
-    if c.given or c.family:
-        return "n:" + fold(f"{c.given} {c.family}")
-    if c.company:
-        return "o:" + fold(c.company)
-    return ""
+    # A first or last name alone counts too, and a card with no name goes by its company. A business can be
+    # typed in either way, as a first name on one card and as the company on another.
+    return "n:" + fold(f"{c.given} {c.family}" if c.given or c.family else c.company) if c.given or c.family or c.company else ""
 
 
 def _contradict(a: Contact, b: Contact) -> bool:

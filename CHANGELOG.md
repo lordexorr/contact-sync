@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.8
+
+- iCloud accounts are added and removed on the Contact Sync page, like Google accounts, instead of on the Configuration tab. A new account is signed in straight away, so a wrong Apple ID or password shows up at once, and no restart is needed. To change a password, add the account again with the new one.
+- Accounts already on the Configuration tab move to the page by themselves the first time this version starts; they can then be deleted from the Configuration tab.
+- Fixed: a business typed in as a first name on one card and as the company on another wasn't matched, so each was copied into the other's accounts.
+
 ## 0.3.7
 
 - Fixed: a card with only a first name, or only a last name, never matched its copy in another account, so applying made a second copy of it in each. A name on its own now matches, under the same rules as a full name.
