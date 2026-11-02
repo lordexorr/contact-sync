@@ -269,7 +269,8 @@ def _write_summary(folder: Path, result: dict, tz) -> None:
                            ("Not made", [c for c in result["changes"] if c["error"]])):
         if changes:
             lines.append(f"{title} ({len(changes):,})")
-            lines += [f"  {c['subject']} · {c['account']}: {c['what']}" + (f" — {c['error']}" if c["error"] else "")
+            lines += [f"  {c['subject']} · {c['account']}: {c['what']}"
+                      + (f" — {c['error'] or c['warning']}" if c["error"] or c.get("warning") else "")
                       for c in sorted(changes, key=lambda c: (fold(c["subject"]), c["account"]))]
             lines.append("")
     try:
@@ -305,6 +306,7 @@ class _Writer:
         self.failed_groups: set[str] = set()  # accounts where creating or deleting a group failed
         self.uids: dict[str, str] = {}  # ref -> UID of each iCloud contact made here
         self.new_groups: dict[str, list[str]] = {}  # account -> addresses of iCloud groups made here
+        self._warning = ""  # something to check about the change being made, though it was made
         raw = accounts.raw
         self._items = {k: {i["href"]: i for i in d["items"]} for k, d in raw.items() if k.startswith("icloud:")}
         self._groups = {k: vcard.groups(d["items"]) for k, d in raw.items() if k.startswith("icloud:")}
@@ -338,8 +340,9 @@ class _Writer:
             error = f"Unexpected error ({type(err).__name__}: {err}). Details are in the add-on's log."
         if error and person:
             self.failed.add(person)
+        warning, self._warning = self._warning, ""
         self.result["changes"].append({"account": self.names[account], "subject": subject, "what": what,
-                                       "error": error})
+                                       "error": error, "warning": "" if error else warning})
         self.progress.done += 1
         return not error
 
@@ -376,6 +379,8 @@ class _Writer:
                     current = self.accounts.photo(edit["ref"])
                 except Exception as err:
                     log.warning("Couldn't read a photo to keep it, so its link stays as it was: %s", err)
+                    self._warning = (f"The photo was left as it was, because it couldn't be downloaded ({err}). "
+                                     "Check that this card still has its photo.")
             text = vcard.edit(item["vcard"], edit, photo, current, [self._items[account][c]["vcard"] for c in carry])
             conn.put(item["href"], text, item["etag"])
         else:

@@ -135,7 +135,8 @@ async def index(request: web.Request) -> web.Response:
     body = (
         "<h1>Contact Sync</h1>"
         "<p class='muted'>Checks every account daily, and writes nothing until you apply the reviewed changes.</p>"
-        f"{take_flash(state)}{review_card(state)}{accounts_card(state)}{icloud_card(state)}{google_card(state)}"
+        # Review comes right after Check now, where a check's results are looked at next.
+        f"{take_flash(state)}{accounts_card(state)}{review_card(state)}{icloud_card(state)}{google_card(state)}"
     )
     # No auto-refresh during a Google sign-in: it would wipe the pasted address.
     return page(request, body, refresh=state.checking and not state.google_sign_in)

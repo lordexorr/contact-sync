@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.9
+
+- When an iCloud card is saved with its photo left as it was, because the photo couldn't be downloaded, the results page says so on that change, in a **Check** column, and the Made heading counts how many to check. `What changed.txt` in the backup notes it too.
+- On the Contact Sync page, the Review section comes right after **Check now**, so a check's results are just below the button.
+
 ## 0.3.8
 
 - iCloud accounts are added and removed on the Contact Sync page, like Google accounts, instead of on the Configuration tab. A new account is signed in straight away, so a wrong Apple ID or password shows up at once, and no restart is needed. To change a password, add the account again with the new one.

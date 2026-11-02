@@ -405,7 +405,9 @@ def result_body(result: dict | None, progress, when) -> str:
     if failed:
         parts.append(f"<section class='card'><h2>Not made ({len(failed):,})</h2>{_change_table(failed)}</section>")
     if made:
-        parts.append(f"<section class='card'><h2>Made ({len(made):,})</h2>{_change_table(made)}</section>")
+        check = sum(bool(c.get("warning")) for c in made)
+        note = f" · {check:,} to check" if check else ""
+        parts.append(f"<section class='card'><h2>Made ({len(made):,}{note})</h2>{_change_table(made)}</section>")
     parts.append("<div class='row'><a class='button' href='review'>Open the review</a></div>")
     return "".join(parts)
 
@@ -470,11 +472,14 @@ def _totals(work: dict, one_person: bool) -> str:
 
 
 def _change_table(changes: list[dict]) -> str:
-    errors = any(c["error"] for c in changes)
-    head = "<th>Account</th><th>Contact or group</th><th>Change</th>" + ("<th>Why not</th>" if errors else "")
+    """Changes in a table, with a last column for why one wasn't made, or for something to check about one
+    that was."""
+    notes = any(c["error"] or c.get("warning") for c in changes)
+    head = ("<th>Account</th><th>Contact or group</th><th>Change</th>"
+            + (f"<th>{'Why not' if any(c['error'] for c in changes) else 'Check'}</th>" if notes else ""))
     rows = "".join(
         f"<tr><td>{esc(c['account'])}</td><td>{esc(c['subject'])}</td><td>{esc(c['what'])}</td>"
-        + (f"<td class='bad'>{esc(c['error'])}</td>" if errors else "") + "</tr>"
+        + (f"<td class='bad'>{esc(c['error'] or c.get('warning', ''))}</td>" if notes else "") + "</tr>"
         for c in changes
     )
     return f"<div class='scroll'><table><thead><tr>{head}</tr></thead><tbody>{rows}</tbody></table></div>"
