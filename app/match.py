@@ -12,7 +12,7 @@ def match(contacts: list[Contact], same: set[str], different: set[str]) -> tuple
     """Groups of contact refs that are one person, and (pair, reason) for pairs the user should decide.
 
     Contacts are one person when they share a phone number or email address and their names agree; when
-    they have the same full name in different accounts and nothing contradicts it; or when the user said
+    they have the same name in different accounts and nothing contradicts it; or when the user said
     so. A shared phone or email under different names, or the same name where something does contradict
     it, is a suggestion. Pairs are two refs joined by "||"; a suggestion names the first ref of each
     group, which is also how the user's same/different decisions are stored.
@@ -68,12 +68,14 @@ def match(contacts: list[Contact], same: set[str], different: set[str]) -> tuple
     clusters = sorted((sorted(g) for g in groups.values()), key=lambda g: g[0])
 
     first = {r: g[0] for g in clusters for r in g}
+    # An answer holds for the two people it was about, even after either gains a copy that sorts first.
+    answered = {frozenset(first[r] for r in pair.split("||")) for pair in same | different
+                if all(r in first for r in pair.split("||"))}
     open_pairs = {}
     for pair, reason in sorted(suggested.items()):
         a, b = (first[r] for r in pair.split("||"))
-        key = "||".join(sorted((a, b)))
-        if a != b and key not in different and key not in same:
-            open_pairs.setdefault(key, reason)
+        if a != b and frozenset((a, b)) not in answered:
+            open_pairs.setdefault("||".join(sorted((a, b))), reason)
     return clusters, sorted(open_pairs.items())
 
 
@@ -83,9 +85,10 @@ def _detail_keys(c: Contact) -> set[str]:
 
 
 def _name_key(c: Contact) -> str:
-    if c.given and c.family:
+    # A first or last name alone counts too: a business typed in as a first name has nothing else to match by.
+    if c.given or c.family:
         return "n:" + fold(f"{c.given} {c.family}")
-    if not c.given and not c.family and c.company:
+    if c.company:
         return "o:" + fold(c.company)
     return ""
 

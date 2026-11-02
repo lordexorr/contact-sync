@@ -57,7 +57,7 @@ After each check, the **Review** section at the top of the Contact Sync page cou
 - **Duplicates within one account:** the same person more than once in one account, with every card shown side by side. **Merge into one** keeps the card with the most details, moves everything from the other cards onto it (including details Contact Sync doesn't otherwise use, such as dates, social profiles and messaging handles), and deletes the others when you apply. The person's table then has a **Duplicate cards** row, which you can untick. **Keep both** leaves them as they are. Either choice moves the card to a collapsed **Decided** section, where you can switch. Until you choose, applying leaves the extra cards alone. A same-name pair in one account first appears under **Possible matches**; answering **Same person** brings it here.
 - **Start over** forgets every match, choice and skip.
 
-Contacts are matched automatically when they share a phone number or email address and their names agree, or when they have the same full name in different accounts and nothing contradicts it. Being matched only means the copies are the same person: every difference between them still appears under **Changes**. Everything you choose is saved the moment you click it, and kept for later checks.
+Contacts are matched automatically when they share a phone number or email address and their names agree, or when they have the same name in different accounts and nothing contradicts it. A first or last name on its own counts, so a business typed in as a first name still matches. Being matched only means the copies are the same person: every difference between them still appears under **Changes**. Everything you choose is saved the moment you click it, and kept for later checks.
 
 ## Applying changes
 
@@ -86,6 +86,8 @@ The record made after each apply is what lets later reviews tell a deletion from
 - A group deleted from one account, or a person taken out of a group, is deleted from or taken out of the group in the other accounts.
 
 Until the first apply, nothing counts as deleted.
+
+When more than 10 contacts have gone from one account since the last apply, that looks more like a glitch or a mistake than tidying up. The review shows a warning, and deleting those contacts from the other accounts starts unticked, so nothing goes until you tick each one.
 
 ### Backups
 

@@ -60,6 +60,9 @@ def run(options: dict, person: str | None, token: str, tz, progress: Progress) -
     try:
         with check.check_lock:
             _apply(options, person, token, tz, progress, result)
+    except check.ReadError as err:
+        log.warning("Apply stopped: %s", err)
+        result["status"], result["message"] = "failed", f"{err} Nothing was written."
     except Exception as err:
         log.exception("Apply failed")
         result["status"] = "failed"
@@ -94,7 +97,11 @@ def _apply(options: dict, person: str | None, token: str, tz, progress: Progress
         result["person"] = before["sync"]["people"].get(person, {}).get("name", "")
     work = plan.scope(before, person)
     if plan.digest(work) != token:
-        result["status"], result["message"] = "stopped", STOPPED
+        # Applying everyone leaves out an account it can't read, which changes what it would do; say so.
+        unread = [f"{a['service']} {a['name']} ({a['error']})" for a in (check.load_status() or {}).get("accounts", [])
+                  if a["error"]] if person is None else []
+        result["status"] = "stopped"
+        result["message"] = f"Couldn't read {'; '.join(unread)}, so nothing was written." if unread else STOPPED
         return
     if plan.is_empty(work):
         result["status"], result["message"] = "done", "Nothing to apply."
@@ -114,29 +121,41 @@ def _apply(options: dict, person: str | None, token: str, tz, progress: Progress
             _write_summary(folder, result, tz)
 
     progress.step = "Checking the result"
+    notes = []
+    failed = sum(bool(c["error"]) for c in result["changes"])
+    if failed:
+        notes.append(f"{failed:,} change{' was' if failed == 1 else 's were'} not made. Those people stay in the "
+                     "review, so you can try again.")
+    try:
+        _record_result(options, person, before, writer)
+    except check.ReadError as err:  # the changes are made; only the record of them waits
+        log.warning("Couldn't read the result of an apply: %s", err)
+        notes.append(f"{err} The review catches up at the next check.")
+    result["status"], result["message"] = "done", " ".join(notes)
+
+
+def _record_result(options: dict, person: str | None, before: dict, writer: "_Writer") -> None:
+    """Read what the accounts hold now, and record it for the people the apply covered."""
     if person is None:
         check.read_accounts(options)
     else:
         refs = set(before["sync"]["people"][person]["refs"]) | set(writer.created.values())
         check.merge_records(check.read_some(options, sorted(refs), writer.new_groups), refs)
     loaded = review.current_records(options)
-    if loaded:
-        contacts, accounts_now = loaded
-        people_before = before["sync"]["people"]
-        # A new copy is the person it was made from, even with too little on it to match by, such as a first
-        # name and a short number. Recording them together keeps them matched from now on.
-        decided = review.decisions()
-        decided["same"] = sorted(set(decided.get("same", [])) | {
-            "||".join(sorted((people_before[k]["refs"][0], ref))) for (k, _), ref in writer.created.items()})
-        after = plan.build(contacts, accounts_now, decided, base.load())
-        keys = [person] if person else [k for k, p in people_before.items() if not p["held"]]
-        covered = {r for k in keys if k in people_before and k not in writer.failed for r in people_before[k]["refs"]}
-        covered |= {ref for (k, _), ref in writer.created.items() if k not in writer.failed}
-        base.record(contacts, after["clusters"], covered, accounts_now, person is None, writer.failed_groups)
-    failed = sum(bool(c["error"]) for c in result["changes"])
-    result["status"] = "done"
-    result["message"] = (f"{failed:,} change{' was' if failed == 1 else 's were'} not made. Those people stay in "
-                         "the review, so you can try again." if failed else "")
+    if not loaded:
+        return
+    contacts, accounts_now = loaded
+    people_before = before["sync"]["people"]
+    # A new copy is the person it was made from, even with too little on it to match by, such as a first
+    # name and a short number. Recording them together keeps them matched from now on.
+    decided = review.decisions()
+    decided["same"] = sorted(set(decided.get("same", [])) | {
+        "||".join(sorted((people_before[k]["refs"][0], ref))) for (k, _), ref in writer.created.items()})
+    after = plan.build(contacts, accounts_now, decided, base.load())
+    keys = [person] if person else [k for k, p in people_before.items() if not p["held"]]
+    covered = {r for k in keys if k in people_before and k not in writer.failed for r in people_before[k]["refs"]}
+    covered |= {ref for (k, _), ref in writer.created.items() if k not in writer.failed}
+    base.record(contacts, after["clusters"], covered, accounts_now, person is None, writer.failed_groups)
 
 
 def _now() -> str:
@@ -349,8 +368,14 @@ class _Writer:
         if account.startswith("icloud:"):
             item = self._items[account][cid]
             source = self.accounts.raw[account]["photos"].get(cid)
-            # A photo iCloud gives as a link goes back as the picture itself, so the rewrite keeps it.
-            current = self.accounts.photo(edit["ref"]) if edit["photo"] is None and source and source[0] == "url" else None
+            current = None
+            if edit["photo"] is None and source and source[0] == "url":
+                # A photo iCloud gives as a link goes back as the picture itself, so the rewrite keeps it. If it
+                # can't be read, the link goes back as it was instead of holding up the other changes.
+                try:
+                    current = self.accounts.photo(edit["ref"])
+                except Exception as err:
+                    log.warning("Couldn't read a photo to keep it, so its link stays as it was: %s", err)
             text = vcard.edit(item["vcard"], edit, photo, current, [self._items[account][c]["vcard"] for c in carry])
             conn.put(item["href"], text, item["etag"])
         else:

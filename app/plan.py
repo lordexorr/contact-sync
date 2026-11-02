@@ -26,6 +26,9 @@ LABEL_CHOICES = {
     "related": [],
 }
 _DELETED = {"text": "Deleted since the last sync", "state": "note"}
+# More contacts than this gone from one account since the last apply looks like a glitch or a mistake rather
+# than tidying up, so deleting them from the other accounts waits until you tick each one.
+MASS_DELETION = 10
 
 
 def build(contacts: list[Contact], accounts: list[dict], decisions: dict, base: dict | None = None) -> dict:
@@ -56,8 +59,16 @@ def build(contacts: list[Contact], accounts: list[dict], decisions: dict, base: 
     spelling = {fold(g): g for a in accounts for g in a["groups"]} | {fold(g): g for c in contacts for g in c.groups}
     members = Counter((c.account, g) for c in contacts for g in {fold(x) for x in c.groups})
 
+    gone = Counter(a for refs in clusters for a in last.deleted_from(
+        refs, [a for a in names if a not in {by_ref[r].account for r in refs}]))
+    mass = {a for a, n in gone.items() if n > MASS_DELETION}
+    keyed = _decision_keys(decisions)
+
     review = {"columns": list(names.values()), "suggestions": [], "conflicts": [], "people": [], "groups": [],
-              "duplicates": [], "clusters": clusters, "sync": {"names": names, "people": {}, "groups": []}}
+              "duplicates": [], "clusters": clusters, "sync": {"names": names, "people": {}, "groups": []},
+              "warnings": [f"{gone[a]:,} contacts have gone from {names[a]} since the last sync, more than usual. "
+                           "Deleting them from the other accounts waits until you tick each one, so check that "
+                           "account first." for a in sorted(mass)]}
     for pair, reason in suggestions:
         review["suggestions"].append({
             "id": pair, "reason": reason, "contacts": [_summary(by_ref[r], names) for r in pair.split("||")],
@@ -72,24 +83,27 @@ def build(contacts: list[Contact], accounts: list[dict], decisions: dict, base: 
     totals = Counter()  # folded group name -> people in it after the sync
     for refs in clusters:
         copies = [by_ref[r] for r in refs]
-        key = refs[0]
+        # Decisions are filed under a person's key: their first ref when the decision was made. A new copy can
+        # sort ahead of it, so a person keeps the key their decisions already use.
+        key = next((r for r in refs if r in keyed), refs[0])
         merged, conflicts = _merge(key, copies, picks, names, last)
         review["conflicts"] += [{**c, "person": merged["display"], "decided": c["id"] in picks} for c in conflicts]
         person = _Person(key, copies, merged, names, skips, keeps, last)
-        for a, extras in person.extras.items():
-            dup_id = f"{key}|dup:{a}"
-            review["duplicates"].append({
-                "id": dup_id, "person": merged["display"], "account": names[a], "choice": duplicates.get(dup_id, ""),
-                "copies": [{**_summary(c, names), "kept": c is person.first[a]} for c in [person.first[a]] + extras],
-            })
-        person.compare(duplicates)
-        person.ops["held"] = key in waiting
+        person.compare(duplicates, mass)
+        person.ops["held"] = refs[0] in waiting
         if not person.ops["delete"]:
             person.memberships(have, dropped, to_group, from_group, totals)
+            for a, extras in person.extras.items():
+                dup_id = f"{key}|dup:{a}"
+                review["duplicates"].append({
+                    "id": dup_id, "person": merged["display"], "account": names[a],
+                    "choice": duplicates.get(dup_id, ""),
+                    "copies": [{**_summary(c, names), "kept": c is person.first[a]} for c in [person.first[a]] + extras],
+                })
         review["sync"]["people"][key] = person.ops
         if person.rows:
             review["people"].append({"key": key, "name": merged["display"], "rows": person.rows,
-                                     "held": key in waiting})
+                                     "held": person.ops["held"]})
     review["people"].sort(key=lambda p: fold(p["name"]))
     review["groups"], review["sync"]["groups"] = _group_rows(
         names, have, dropped, spelling, members, to_group, from_group, totals, skips, last)
@@ -115,8 +129,10 @@ def scope(review: dict, person: str | None = None) -> dict:
     for op in sync["groups"]:
         add = [m for m in op["add"] if m["person"] in allowed]
         remove = [m for m in op["remove"] if m["person"] in allowed]
-        if person is not None:  # one person never creates a group just for others, or deletes one
-            op = {**op, "create": op["create"] and bool(add), "delete": False}
+        # A group is created for the people joining it; one whose only joiners are left out waits for them.
+        # It's created empty only when it's empty everywhere. One person never deletes a group.
+        create = op["create"] and (bool(add) or (person is None and not op["add"]))
+        op = {**op, "create": create, "delete": op["delete"] and person is None}
         if op["create"] or op["delete"] or add or remove:
             groups.append({**op, "add": add, "remove": remove})
     return {"names": sync["names"], "people": people, "groups": groups}
@@ -161,6 +177,13 @@ def show(field: str, value: str) -> str:
         value = " ".join(value.split())
         return value if len(value) <= 80 else value[:79] + "…"
     return value
+
+
+def _decision_keys(decisions: dict) -> set[str]:
+    """The person keys that unticks, picks and duplicate choices are filed under ("<account>|<id>")."""
+    ids = [*decisions.get("skips", []), *decisions.get("keeps", []), *decisions.get("picks", {}),
+           *decisions.get("duplicates", {})]
+    return {"|".join(i.split("|", 2)[:2]) for i in ids if not i.startswith("group|")}
 
 
 def _edits(person_ops: dict) -> bool:
@@ -402,12 +425,12 @@ class _Person:
         self.ops = {"name": merged["display"], "refs": [c.ref for c in copies], "held": False,
                     "update": {}, "create": None, "delete": [], "drop": []}
 
-    def compare(self, duplicates: dict) -> None:
+    def compare(self, duplicates: dict, mass: set[str]) -> None:
         """Fill in the rows, and the edits for the rows left ticked. duplicates holds the user's merge or keep
-        choices for copies in the same account."""
+        choices for copies in the same account; mass, the accounts where unusually many contacts have gone."""
         gone = self.last.deleted_from(self.ops["refs"], self.missing)
         if gone:
-            if not self._delete_row(gone)["skipped"]:
+            if not self._delete_row(gone, bool(set(gone) & mass))["skipped"]:
                 self.ops["delete"] = list(self.ops["refs"])
                 return  # nothing else about a person matters once they're being deleted
         elif self.missing and not self._contact_row()["skipped"]:
@@ -443,8 +466,11 @@ class _Person:
         c = self.first.get(account)
         return {"person": self.key, "ref": c.ref if c else "", "name": self.merged["display"]}
 
-    def _row(self, row_id: str, title: str, cells: dict, changing: list[str], after: dict) -> dict:
+    def _row(self, row_id: str, title: str, cells: dict, changing: list[str], after: dict,
+             unticked: bool = False) -> dict:
+        """A row, ticked unless skipped. One that starts unticked stays so until it's ticked."""
         row = _row(row_id, title, cells, changing, self.names, after, self.skips)
+        row["skipped"] = row["skipped"] or (unticked and row_id not in self.keeps)
         self.rows.append(row)
         return row
 
@@ -454,7 +480,7 @@ class _Person:
         after = {"kind": "text", "value": "In every account", "details": _details(self.merged)}
         return self._row(f"{self.key}|new", "Contact", cells, self.missing, after)
 
-    def _delete_row(self, gone: list[str]) -> dict:
+    def _delete_row(self, gone: list[str], unticked: bool) -> dict:
         # The same id as the row that copies the person, so a skip carries over either way.
         cells = {}
         for a, name in self.names.items():
@@ -463,7 +489,7 @@ class _Person:
             else:
                 cells[name] = [_DELETED] if a in gone else [{"text": "Not in this account"}]
         return self._row(f"{self.key}|new", "Contact", cells, list(self.first),
-                         {"kind": "text", "value": "Deleted from every account"})
+                         {"kind": "text", "value": "Deleted from every account"}, unticked)
 
     def _merge_row(self, account: str) -> None:
         """One card in place of several in account: everything on the others moves onto the one kept, which

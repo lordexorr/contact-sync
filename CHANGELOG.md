@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.7
+
+- Fixed: a card with only a first name, or only a last name, never matched its copy in another account, so applying made a second copy of it in each. A name on its own now matches, under the same rules as a full name.
+- Fixed: once a person gained a new copy that sorted ahead of their others, their unticked rows, picked values and labels, and possible-match answers stopped applying, and unticked rows came back ticked. Decisions now stay with the person.
+- Fixed: an iCloud photo that couldn't be downloaded stopped every other change to that card. The card is now saved with its photo left as it was.
+- When more than 10 contacts have gone from one account since the last apply, the review warns, and deleting them from the other accounts starts unticked.
+- When an account can't be read during an apply, the result names it and says why, instead of calling it an unexpected error. If the accounts can't be read again after the changes are made, the apply still counts as done.
+- After applying one person, the contact and group counts on the Contact Sync page are up to date.
+- A person being deleted everywhere no longer shows a duplicates card.
+- A group whose only new members are waiting on a possible match isn't created until they can join it.
+
 ## 0.3.6
 
 - Label dropdowns end with **Custom…**, which opens a box to type any label, such as "Facebook" or "Personal". iCloud and Google both keep it as typed.

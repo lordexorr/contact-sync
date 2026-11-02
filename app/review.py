@@ -119,6 +119,7 @@ def page_body(review: dict | None) -> str:
         "you click it, and kept for later checks.</p>",
         f"<p>{_counts_line(review['counts'])}</p>",
     ]
+    parts += [f"<div class='flash error'>{esc(w)}</div>" for w in review["warnings"]]
     if review["suggestions"] or review["decided_matches"]:
         parts.append(_suggestions(review["suggestions"], review["decided_matches"]))
     if review["duplicates"]:
@@ -352,7 +353,7 @@ def apply_body(review: dict | None, person: str | None, checking: bool) -> str:
     people = review["sync"]["people"]
     heading = f"<h1>Apply {esc(people[person]['name'])}</h1>" if person in people else "<h1>Apply changes</h1>"
     work = plan.scope(review, person)
-    notes = []
+    notes = list(review["warnings"])
     if person is None and (held := plan.held_back(review)):
         notes.append(f"{_n(held, 'person', 'people')} waiting on a possible match {'is' if held == 1 else 'are'} "
                      "left out until you answer it in the review.")

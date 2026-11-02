@@ -3,7 +3,7 @@ Read-only: it never writes to any account."""
 import logging
 import re
 import threading
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -113,10 +113,15 @@ def read_accounts(options: dict) -> _Run:
     return run
 
 
+class ReadError(Exception):
+    """An account that couldn't be read for an apply. The message names it and says why."""
+
+
 def read_some(options: dict, refs: list[str], new_groups: dict[str, list[str]] | None = None) -> _Run:
     """Fresh copies of a few contacts, plus every account's groups, without reading every contact. raw holds
     just those contacts and the groups (iCloud group cards are found in the latest snapshot, plus any in
-    new_groups). Contacts that no longer exist are left out. The caller holds check_lock."""
+    new_groups). Contacts that no longer exist are left out. Raises ReadError if an account can't be read.
+    The caller holds check_lock."""
     wanted = defaultdict(list)
     for ref in refs:
         account, _, cid = ref.partition("|")
@@ -125,35 +130,48 @@ def read_some(options: dict, refs: list[str], new_groups: dict[str, list[str]] |
     for a in options["icloud_accounts"]:
         if not a["apple_id"] or not a["app_password"]:
             continue
-        key = f"icloud:{a['apple_id']}"
-        snapshot = storage.read_json(_snapshot_path(f"icloud-{a['apple_id']}"), [])
-        hrefs = list(dict.fromkeys(wanted[key] + [i["href"] for i in vcard.groups(snapshot).values()]
-                                   + (new_groups or {}).get(key, [])))
-        with ICloudAddressBook(a["apple_id"], a["app_password"]) as book:
-            items = book.fetch(hrefs)
-            contacts, groups, photo_refs = vcard.read(key, items)
-            for c in contacts:
-                if c.id in photo_refs:
-                    c.photo = run.fingerprints.get(photo_refs[c.id], book.fetch_photo)
-        run.accounts.append({"key": key, "name": a["label"] or "iCloud", "groups": groups})
-        run.contacts += [c.to_dict() for c in contacts]
-        run.raw[key] = {"book": book.book, "items": items, "photos": photo_refs}
+        try:
+            _read_some_icloud(a, wanted[f"icloud:{a['apple_id']}"], new_groups or {}, run)
+        except Exception as err:
+            raise ReadError(f"Couldn't read iCloud {a['label'] or a['apple_id']}: {_describe(err, 'iCloud')}") from err
     for a in google_accounts():
-        key = f"google:{a['email']}"
-        with GoogleContacts(a["refresh_token"], options["google_client_id"], options["google_client_secret"]) as api:
-            persons = [p for p in (api.fetch_contact(rn) for rn in wanted[key]) if p]
-            groups = [g for g in api.fetch_groups() if g.get("groupType") == "USER_CONTACT_GROUP"]
-            group_names = {g["resourceName"]: g["name"] for g in groups}
-            photo_urls = {}
-            for person in persons:
-                c, photo_url = people.read(key, person, group_names)
-                if photo_url:
-                    c.photo = run.fingerprints.get(("url", photo_url), api.fetch_photo)
-                    photo_urls[c.id] = photo_url
-                run.contacts.append(c.to_dict())
-        run.accounts.append({"key": key, "name": a["email"], "groups": list(group_names.values())})
-        run.raw[key] = {"people": persons, "groups": groups, "photos": photo_urls}
+        try:
+            _read_some_google(a, wanted[f"google:{a['email']}"], options, run)
+        except Exception as err:
+            raise ReadError(f"Couldn't read Google {a['email']}: {_describe(err, 'Google')}") from err
     return run
+
+
+def _read_some_icloud(account: dict, hrefs: list[str], new_groups: dict, run: _Run) -> None:
+    key = f"icloud:{account['apple_id']}"
+    snapshot = storage.read_json(_snapshot_path(f"icloud-{account['apple_id']}"), [])
+    hrefs = list(dict.fromkeys(hrefs + [i["href"] for i in vcard.groups(snapshot).values()] + new_groups.get(key, [])))
+    with ICloudAddressBook(account["apple_id"], account["app_password"]) as book:
+        items = book.fetch(hrefs)
+        contacts, groups, photo_refs = vcard.read(key, items)
+        for c in contacts:
+            if c.id in photo_refs:
+                c.photo = run.fingerprints.get(photo_refs[c.id], book.fetch_photo)
+    run.accounts.append({"key": key, "name": account["label"] or "iCloud", "groups": groups})
+    run.contacts += [c.to_dict() for c in contacts]
+    run.raw[key] = {"book": book.book, "items": items, "photos": photo_refs}
+
+
+def _read_some_google(account: dict, resources: list[str], options: dict, run: _Run) -> None:
+    key = f"google:{account['email']}"
+    with GoogleContacts(account["refresh_token"], options["google_client_id"], options["google_client_secret"]) as api:
+        persons = [p for p in (api.fetch_contact(rn) for rn in resources) if p]
+        groups = [g for g in api.fetch_groups() if g.get("groupType") == "USER_CONTACT_GROUP"]
+        group_names = {g["resourceName"]: g["name"] for g in groups}
+        photo_urls = {}
+        for person in persons:
+            c, photo_url = people.read(key, person, group_names)
+            if photo_url:
+                c.photo = run.fingerprints.get(("url", photo_url), api.fetch_photo)
+                photo_urls[c.id] = photo_url
+            run.contacts.append(c.to_dict())
+    run.accounts.append({"key": key, "name": account["email"], "groups": list(group_names.values())})
+    run.raw[key] = {"people": persons, "groups": groups, "photos": photo_urls}
 
 
 def merge_records(run: _Run, replaced: set[str]) -> None:
@@ -169,6 +187,15 @@ def merge_records(run: _Run, replaced: set[str]) -> None:
         for account in records["accounts"]:
             account["groups"] = groups.get(account["key"], account["groups"])
         storage.write_json(RECORDS_FILE, records)
+        # The counts on the Contact Sync page follow along.
+        status = load_status()
+        if status:
+            counts = Counter(c["account"] for c in records["contacts"])
+            for row in status["accounts"]:
+                key = f"{row['service'].lower()}:{row['login']}"
+                if key in groups and not row["error"]:
+                    row["contacts"], row["groups"] = counts[key], len(groups[key])
+            storage.write_json(STATUS_FILE, status)
         for key, data in run.raw.items():
             service, _, login = key.partition(":")
             path = _snapshot_path(f"{service}-{login}")
