@@ -8,21 +8,13 @@ PRIVATE_DIR = Path("/data")
 # the raw contact snapshots can be opened from a PC.
 SHARED_DIR = Path("/config")
 
-DEFAULTS = {"daily_check_time": "08:00", "notify": "", "google": {}}
+DEFAULTS = {"daily_check_time": "08:00", "notify": ""}
 
 
 def load_options() -> dict:
-    """The add-on's options with every key present, so callers can index them directly.
-
-    The Configuration tab's Google section arrives as {"google": {"client_id", "client_secret"}}
-    and is flattened here to google_client_id and google_client_secret.
-    """
+    """The add-on's options with every key present, so callers can index them directly."""
     with (PRIVATE_DIR / "options.json").open(encoding="utf-8") as f:
-        options = {**DEFAULTS, **_trimmed(json.load(f))}
-    google = options.pop("google") or {}
-    options["google_client_id"] = google.get("client_id", "")
-    options["google_client_secret"] = google.get("client_secret", "")
-    return options
+        return {**DEFAULTS, **_trimmed(json.load(f))}
 
 
 def _trimmed(value):

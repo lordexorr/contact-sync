@@ -1,5 +1,5 @@
 name: Contact Sync
-version: "0.3.11"
+version: "0.3.12"
 slug: contact_sync
 description: Keeps contacts in sync across iCloud and Google accounts. Checks daily and writes nothing until you apply the changes.
 arch:
@@ -16,12 +16,6 @@ map:
 options:
   daily_check_time: "08:00"
   notify: ""
-  google:
-    client_id: ""
-    client_secret: ""
 schema:
   daily_check_time: "match(^([01][0-9]|2[0-3]):[0-5][0-9]$)"
   notify: str?
-  google:
-    client_id: str?
-    client_secret: password?

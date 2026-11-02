@@ -71,14 +71,6 @@ def save_google_app(client_id: str, client_secret: str) -> None:
         storage.write_json(GOOGLE_APP_FILE, {"client_id": client_id, "client_secret": client_secret})
 
 
-def move_google_app(options: dict) -> None:
-    """Once only: take over the client ID and secret set on the Configuration tab by earlier versions."""
-    with _state_lock:
-        if not GOOGLE_APP_FILE.exists() and options["google_client_id"] and options["google_client_secret"]:
-            storage.write_json(GOOGLE_APP_FILE, {"client_id": options["google_client_id"],
-                                                 "client_secret": options["google_client_secret"]})
-
-
 def _google(refresh_token: str) -> GoogleContacts:
     app = google_app()
     return GoogleContacts(refresh_token, app["client_id"], app["client_secret"])

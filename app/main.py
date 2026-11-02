@@ -568,9 +568,7 @@ label.value{display:block}
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     app = web.Application(middlewares=[ingress_only])
-    options = load_options()
-    check.move_google_app(options)  # earlier versions kept the Google app on the Configuration tab
-    app[STATE] = State(options, home_tz())
+    app[STATE] = State(load_options(), home_tz())
     app.add_routes([
         web.get("/", index),
         web.post("/check", check_now),

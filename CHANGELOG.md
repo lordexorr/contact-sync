@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.12
+
+- The Google section is gone from the Configuration tab, which now holds only the daily check time and notification. The Google app is set under **Manage accounts** on the Contact Sync page. Updating from 0.3.10 or earlier, enter its client ID and secret there again.
+
 ## 0.3.11
 
 - The Google app's client ID and secret are set under **Manage accounts** on the Contact Sync page, with the Google accounts, instead of on the Configuration tab. They take effect straight away, with no restart. Once saved, the app folds away; changing it later means connecting each Google account again, and the page says so.
