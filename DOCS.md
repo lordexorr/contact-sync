@@ -34,13 +34,13 @@ Optionally, set **Daily notification** to a notify entity or service, such as `n
 
 ### 4. Add each iCloud account
 
-Open **Contact Sync** in the sidebar. Under **iCloud accounts**, enter a label of your choice (shown on the page), the Apple ID, and its app-specific password, then press **Add an iCloud account**. Contact Sync signs in straight away, so a wrong Apple ID or password shows up at once. Repeat for each iCloud account. To change an account's password, add it again with the new one; **Remove** forgets an account and deletes what was saved from it.
+Open **Contact Sync** in the sidebar and open **Manage accounts**. Under **iCloud accounts**, enter a label of your choice (shown on the page), the Apple ID, and its app-specific password, then press **Add an iCloud account**. Contact Sync signs in straight away, so a wrong Apple ID or password shows up at once. Repeat for each iCloud account. To change an account's password, add it again with the new one; **Remove** forgets an account and deletes what was saved from it.
 
 ### 5. Connect each Google account
 
 Use a computer for this. The copy-and-paste step is awkward on a phone.
 
-1. Open **Contact Sync** in the sidebar and press **Connect a Google account**.
+1. Open **Contact Sync** in the sidebar, open **Manage accounts**, and press **Connect a Google account**.
 2. Open the sign-in link and choose the account. Google warns that it hasn't verified the app: choose **Advanced**, then **Go to Contact Sync**. The warning is normal for an app you made yourself.
 3. Allow access to contacts. If Google shows a checkbox for contacts, make sure it's ticked.
 4. The browser ends on a "This site can't be reached" page. That's expected. Copy the whole address from the address bar, paste it into Contact Sync, and press **Connect**.

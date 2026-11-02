@@ -90,15 +90,6 @@ def remove_icloud_account(apple_id: str) -> None:
         _forget("icloud", apple_id)
 
 
-def move_icloud_accounts(configured: list[dict]) -> None:
-    """Once only: take over the iCloud accounts set on the Configuration tab by earlier versions."""
-    with _state_lock:
-        if not ICLOUD_ACCOUNTS_FILE.exists():
-            storage.write_json(ICLOUD_ACCOUNTS_FILE, [
-                {"label": a["label"] or "iCloud", "apple_id": a["apple_id"], "app_password": a["app_password"]}
-                for a in configured if a["apple_id"] and a["app_password"]])
-
-
 def _forget(service: str, login: str) -> None:
     """Delete everything saved from an account that's been removed. The caller holds _state_lock."""
     key = f"{service}:{login}"

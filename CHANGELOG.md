@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.10
+
+- iCloud and Google accounts are together in a **Manage accounts** section on the Contact Sync page, folded away with a count of each. It opens by itself while there are no accounts and during a Google sign-in.
+- The old iCloud accounts section is gone from the Configuration tab. Updating from 0.3.7 or earlier, add your iCloud accounts again under **Manage accounts**.
+
 ## 0.3.9
 
 - When an iCloud card is saved with its photo left as it was, because the photo couldn't be downloaded, the results page says so on that change, in a **Check** column, and the Made heading counts how many to check. `What changed.txt` in the backup notes it too.

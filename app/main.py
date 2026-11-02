@@ -136,7 +136,7 @@ async def index(request: web.Request) -> web.Response:
         "<h1>Contact Sync</h1>"
         "<p class='muted'>Checks every account daily, and writes nothing until you apply the reviewed changes.</p>"
         # Review comes right after Check now, where a check's results are looked at next.
-        f"{take_flash(state)}{accounts_card(state)}{review_card(state)}{icloud_card(state)}{google_card(state)}"
+        f"{take_flash(state)}{accounts_card(state)}{review_card(state)}{manage_card(state)}"
     )
     # No auto-refresh during a Google sign-in: it would wipe the pasted address.
     return page(request, body, refresh=state.checking and not state.google_sign_in)
@@ -391,16 +391,27 @@ def account_row(a: dict) -> str:
     return f"<tr><td>{esc(a['service'])} · {esc(a['name'])}{login}</td>{counts}<td>{status}</td></tr>"
 
 
-def icloud_card(state: State) -> str:
-    accounts = "".join(
+def manage_card(state: State) -> str:
+    """The iCloud and Google account lists, folded away once there's an account. It opens by itself during a
+    Google sign-in, which needs its steps in view."""
+    icloud, google_ = check.icloud_accounts(), check.google_accounts()
+    shown = " open" if state.google_sign_in or not (icloud or google_) else ""
+    counts = f"{len(icloud):,} iCloud · {len(google_):,} Google"
+    return (f"<section class='card'><details class='manage'{shown}><summary><h2>Manage accounts</h2>"
+            f"<span class='muted'>{counts}</span></summary>{icloud_section(icloud)}{google_section(state, google_)}"
+            "</details></section>")
+
+
+def icloud_section(accounts: list[dict]) -> str:
+    listed = "".join(
         f"<li class='row'><span>{esc(a['label'])} <span class='muted'>{esc(a['apple_id'])}</span></span>"
         "<form method='post' action='icloud/remove'>"
         f"<input type='hidden' name='apple_id' value='{esc(a['apple_id'])}'>"
         "<button class='secondary'>Remove</button></form></li>"
-        for a in check.icloud_accounts()
+        for a in accounts
     ) or "<li class='muted'>None added yet.</li>"
     return (
-        f"<section class='card'><h2>iCloud accounts</h2><ul class='plain'>{accounts}</ul>"
+        f"<h3>iCloud accounts</h3><ul class='plain'>{listed}</ul>"
         "<form method='post' action='icloud/add' class='stack' onsubmit=\"this.querySelector('button').disabled=true\">"
         "<label>Label <span class='muted'>(any name you like, shown on this page)</span>"
         "<input type='text' name='label' autocomplete='off' placeholder='iCloud'></label>"
@@ -410,17 +421,17 @@ def icloud_card(state: State) -> str:
         "<input type='password' name='app_password' required autocomplete='new-password' "
         "placeholder='abcd-efgh-ijkl-mnop'></label>"
         "<div class='row'><button>Add an iCloud account</button></div></form>"
-        "<p class='muted'>To change an account's password, add it again with the new one.</p></section>"
+        "<p class='muted'>To change an account's password, add it again with the new one.</p>"
     )
 
 
-def google_card(state: State) -> str:
+def google_section(state: State, accounts: list[dict]) -> str:
     # Connected accounts stay listed even without a client ID and secret, so they can still be disconnected.
     connected = "".join(
         f"<li class='row'><span>{esc(a['email'])}</span><form method='post' action='google/remove'>"
         f"<input type='hidden' name='email' value='{esc(a['email'])}'>"
         "<button class='secondary'>Disconnect</button></form></li>"
-        for a in check.google_accounts()
+        for a in accounts
     ) or "<li class='muted'>None connected yet.</li>"
     if not state.google_configured:
         action = (
@@ -443,7 +454,7 @@ def google_card(state: State) -> str:
         )
     else:
         action = "<form method='post' action='google/start'><button>Connect a Google account</button></form>"
-    return f"<section class='card'><h2>Google accounts</h2><ul class='plain'>{connected}</ul>{action}</section>"
+    return f"<h3>Google accounts</h3><ul class='plain'>{connected}</ul>{action}"
 
 
 def fmt_time(dt: datetime) -> str:
@@ -458,6 +469,12 @@ body{margin:0;padding:16px;background:var(--bg);color:var(--text);font:15px/1.5 
 main{max-width:820px;margin:0 auto}
 h1{font-size:22px;margin:0 0 4px}
 h2{font-size:16px;margin:0 0 12px}
+h3{font-size:15px;margin:20px 0 8px}
+details.manage>summary{cursor:pointer;display:flex;align-items:baseline;gap:12px;list-style:none}
+details.manage>summary h2{display:inline;margin:0}
+details.manage>summary::before{content:"▸";color:var(--muted)}
+details.manage[open]>summary::before{content:"▾"}
+details.manage>summary::-webkit-details-marker{display:none}
 a{color:var(--accent)}
 .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin:16px 0}
 .muted{color:var(--muted)}
@@ -518,9 +535,7 @@ label.value{display:block}
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     app = web.Application(middlewares=[ingress_only])
-    options = load_options()
-    check.move_icloud_accounts(options["icloud_accounts"])  # earlier versions kept them on the Configuration tab
-    app[STATE] = State(options, home_tz())
+    app[STATE] = State(load_options(), home_tz())
     app.add_routes([
         web.get("/", index),
         web.post("/check", check_now),

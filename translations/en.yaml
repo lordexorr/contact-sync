@@ -17,16 +17,3 @@ configuration:
         name: Client ID
       client_secret:
         name: Client secret
-  icloud_accounts:
-    name: iCloud accounts (moved)
-    description: >-
-      iCloud accounts are now added on the Contact Sync page. Any listed here were moved there the first
-      time version 0.3.8 started, so you can delete them from here.
-    fields:
-      label:
-        name: Label
-        description: Any name you like, shown on the Contact Sync page.
-      apple_id:
-        name: Apple ID
-      app_password:
-        name: App-specific password

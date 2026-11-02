@@ -2,14 +2,13 @@
 import json
 from pathlib import Path
 
-# Private to the add-on: options, Google sign-ins, check results.
+# Private to the add-on: options, accounts and sign-ins, check results.
 PRIVATE_DIR = Path("/data")
 # This add-on's folder under addon_configs, reachable over the Samba share, so
 # the raw contact snapshots can be opened from a PC.
 SHARED_DIR = Path("/config")
 
-DEFAULTS = {"daily_check_time": "08:00", "notify": "", "google": {}, "icloud_accounts": []}
-ICLOUD_KEYS = ("label", "apple_id", "app_password")
+DEFAULTS = {"daily_check_time": "08:00", "notify": "", "google": {}}
 
 
 def load_options() -> dict:
@@ -23,7 +22,6 @@ def load_options() -> dict:
     google = options.pop("google") or {}
     options["google_client_id"] = google.get("client_id", "")
     options["google_client_secret"] = google.get("client_secret", "")
-    options["icloud_accounts"] = [{key: a.get(key, "") for key in ICLOUD_KEYS} for a in options["icloud_accounts"]]
     return options
 
 
