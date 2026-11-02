@@ -4,14 +4,14 @@
 
 - iCloud accounts are added and removed on the Contact Sync page, like Google accounts, instead of on the Configuration tab. A new account is signed in straight away, so a wrong Apple ID or password shows up at once, and no restart is needed. To change a password, add the account again with the new one.
 - Accounts already on the Configuration tab move to the page by themselves the first time this version starts; they can then be deleted from the Configuration tab.
-- Fixed: a business typed in as a first name on one card and as the company on another wasn't matched, so each was copied into the other's accounts.
+- Fixed: when the same business had its name in the First name field in one account and in the Company field in another, the two weren't recognized as the same contact, so applying would have made a duplicate in each account. They're now treated as one contact, and the review shows the name and company difference to settle.
 
 ## 0.3.7
 
 - Fixed: a card with only a first name, or only a last name, never matched its copy in another account, so applying made a second copy of it in each. A name on its own now matches, under the same rules as a full name.
-- Fixed: once a person gained a new copy that sorted ahead of their others, their unticked rows, picked values and labels, and possible-match answers stopped applying, and unticked rows came back ticked. Decisions now stay with the person.
-- Fixed: an iCloud photo that couldn't be downloaded stopped every other change to that card. The card is now saved with its photo left as it was.
-- When more than 10 contacts have gone from one account since the last apply, the review warns, and deleting them from the other accounts starts unticked.
+- Fixed: after Apply copied someone into another account, the choices you'd made for them in the review could be forgotten, and rows you'd unticked came back ticked. Those choices now stay with the person.
+- Fixed: when saving changes to an iCloud card, such as a new phone number, its existing photo is downloaded so it survives the save. If that download failed, none of the changes were saved. They now are, with the photo left as it was.
+- If more than 10 contacts disappear from one account at once, the review warns you, and none of them are deleted from your other accounts until you tick each one.
 - When an account can't be read during an apply, the result names it and says why, instead of calling it an unexpected error. If the accounts can't be read again after the changes are made, the apply still counts as done.
 - After applying one person, the contact and group counts on the Contact Sync page are up to date.
 - A person being deleted everywhere no longer shows a duplicates card.
