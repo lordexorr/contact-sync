@@ -75,6 +75,22 @@ def decide_duplicate(dup_id: str, decision: str) -> None:
         _update(lambda d: d.setdefault("duplicates", {}).update({dup_id: decision}))
 
 
+def decide_extra(extra_id: str, choice: str) -> None:
+    """What happens to a detail only Google can hold: the main company, moved to Notes, or deleted. A person has
+    one main company, so choosing another leaves the one before it to be decided."""
+    if not extra_id or choice not in ("main", "notes", "delete"):
+        return
+
+    def change(d):
+        extras = d.setdefault("extras", {})
+        if choice == "main":
+            person = extra_id.rpartition("|extra:")[0]
+            for other in [i for i, v in extras.items() if v == "main" and i.rpartition("|extra:")[0] == person]:
+                del extras[other]
+        extras[extra_id] = choice
+    _update(change)
+
+
 def pick(choice_id: str, choice: str, seen: str = "") -> None:
     """A value picked for a field that differs between accounts, or a label picked for one value. seen
     fingerprints what it was picked between (see plan._Picks)."""
@@ -130,6 +146,8 @@ def tidy(d: dict, review: dict) -> None:
     pick_seen = ({c["id"]: c["seen"] for c in review["conflicts"]}
                  | {r["id"]: r["after"]["seen"] for r in rows if r["after"]["kind"] == "label"})
     duplicates = {x["id"] for x in review["duplicates"]}
+    extras = {e["id"] for x in review.get("extras", []) for e in x["entries"]}
+    d["extras"] = {i: v for i, v in d.get("extras", {}).items() if i in extras}
     d["skips"] = [i for i in d.get("skips", []) if i in row_seen or i in values]
     d["keeps"] = [i for i in d.get("keeps", []) if i in row_seen or i in values]
     skip_seen = d.get("skip_seen", {})
@@ -167,7 +185,8 @@ def summary_card(review: dict | None, last_apply: str = "") -> str:
         ignored = (sum(r["skipped"] for p in review["people"] for r in p["rows"])
                    + sum(r["skipped"] for r in review["groups"]))
         decided = (sum(c["decided"] for c in review["conflicts"]) + len(review["decided_matches"])
-                   + sum(bool(d["choice"]) for d in review["duplicates"]))
+                   + sum(bool(d["choice"]) for d in review["duplicates"])
+                   + sum(d["complete"] for d in review.get("extras", [])))
         kept = " and ".join(filter(None, (f"{ignored:,} ignored" if ignored else "",
                                           f"{decided:,} decided" if decided else "")))
         matches = "Every account that could be read matches." if review.get("unread") else "Every account matches."
@@ -191,6 +210,8 @@ def page_body(review: dict | None) -> str:
         parts.append(_suggestions(review["suggestions"], review["decided_matches"]))
     if review["duplicates"]:
         parts.append(_duplicates(review["duplicates"]))
+    if review["extras"]:
+        parts.append(_extras(review["extras"]))
     if review["conflicts"]:
         parts.append(_conflicts(review["conflicts"]))
     if review["people"] or review["groups"]:
@@ -217,6 +238,8 @@ def _counts_line(counts: dict) -> str:
         parts.append(f"{_n(counts['conflicts'], 'value')} to choose between accounts")
     if counts["duplicates"]:
         parts.append(f"{_n(counts['duplicates'], 'duplicate')} to decide")
+    if counts.get("extras"):
+        parts.append(f"{_n(counts['extras'], 'extra detail')} to decide")
     return " · ".join(parts)
 
 
@@ -274,7 +297,9 @@ def _conflicts(items: list[dict]) -> str:
                 f"{' checked' if picked else ''}>"
                 f"{shown}<span class='muted'>{esc(', '.join(o['accounts']))}</span>{default}</label>"
             )
-        return f"<div class='item'><b>{esc(c['person'])}</b> · {esc(c['field'])}{''.join(options)}</div>"
+        waits = ("<p class='muted'>Until you choose, every account keeps its own order.</p>"
+                 if c.get("required") and not c["decided"] else "")
+        return f"<div class='item'><b>{esc(c['person'])}</b> · {esc(c['field'])}{''.join(options)}{waits}</div>"
 
     waiting = [row(i, c) for i, c in enumerate(items) if not c["decided"]]
     decided = [row(i, c) for i, c in enumerate(items) if c["decided"]]
@@ -418,6 +443,34 @@ def _duplicates(items: list[dict]) -> str:
             f"as they are. Until you choose, applying leaves the extra cards alone.</p>{body}{folded}</section>")
 
 
+def _extras(items: list[dict]) -> str:
+    """Details only Google can hold. Each has to be decided, with nothing chosen for you except that the company
+    every account already shows stays the main one. People still to decide on top; decided ones collapsed below."""
+    def card(d: dict) -> str:
+        rows = []
+        for e in d["entries"]:
+            options = [("main", "Main company")] if e["kind"] == "company" else []
+            options += [("notes", "Move to Notes"), ("delete", "Delete")]
+            boxes = "".join(
+                f"<label class='option'><input type='radio' class='extra' autocomplete='off' name='{esc(e['id'])}' "
+                f"data-id='{esc(e['id'])}' value='{value}'{' checked' if e['choice'] == value else ''}> {text}</label>"
+                for value, text in options)
+            where = "Every account" if e["current"] else f"Only in {', '.join(e['accounts'])}"
+            rows.append(f"<tr><td>{esc(e['text'])}<div class='muted'>{esc(where)}</div></td><td>{boxes}</td></tr>")
+        return (f"<div class='item'><b>{esc(d['person'])}</b><div class='scroll'><table><tbody>{''.join(rows)}"
+                "</tbody></table></div></div>")
+
+    waiting = [card(d) for d in items if not d["complete"]]
+    decided = [card(d) for d in items if d["complete"]]
+    folded = (f"<details class='fold'><summary>Decided ({len(decided)})</summary>{''.join(decided)}</details>"
+              if decided else "")
+    body = "".join(waiting) or "<p class='muted'>Nothing left to decide.</p>"
+    return (f"<section class='card'><h2>Details only Google can hold ({len(waiting)} to decide)</h2><p class='muted'>"
+            "iCloud has room for one company and job title and no location. For each person, choose the main "
+            "company, which every account will show, and move each other detail to Notes or delete it. Until "
+            f"everything about a person is chosen, these details stay as they are.</p>{body}{folded}</section>")
+
+
 def apply_body(review: dict | None, person: str | None, checking: bool) -> str:
     """The page before applying: what changes in each account, and the Apply now button."""
     if review is None:
@@ -431,16 +484,26 @@ def apply_body(review: dict | None, person: str | None, checking: bool) -> str:
                      "left out until you answer it in the review.")
     elif person in people and people[person]["held"]:
         notes.append("This person is waiting on a possible match. Answer it in the review first.")
-    undecided = sum(not c["decided"] and (person is None or c["id"].startswith(person + "|"))
+    undecided = sum(not c["decided"] and not c.get("required") and (person is None or c["id"].startswith(person + "|"))
                     for c in review["conflicts"])
     if undecided and not plan.is_empty(work):
         notes.append(f"{_n(undecided, 'value')} between accounts {'hasn' if undecided == 1 else 'haven'}'t been "
                      "picked. The value marked in the review is used.")
+    orders = sum(not c["decided"] and bool(c.get("required")) and (person is None or c["id"].startswith(person + "|"))
+                 for c in review["conflicts"])
+    if orders and not plan.is_empty(work):
+        notes.append(f"{_n(orders, 'list')} {'hasn' if orders == 1 else 'haven'}'t had an order chosen. Every account "
+                     "keeps its own order until you choose.")
     open_dups = sum(not d["choice"] and (person is None or d["id"].startswith(person + "|"))
                     for d in review["duplicates"])
     if open_dups and not plan.is_empty(work):
         notes.append(f"{_n(open_dups, 'duplicate')} {'hasn' if open_dups == 1 else 'haven'}'t been decided. "
                      "Their extra cards are left as they are.")
+    open_extras = sum(not e["choice"] for d in review["extras"] for e in d["entries"]
+                      if person is None or d["id"] == person)
+    if open_extras and not plan.is_empty(work):
+        notes.append(f"{_n(open_extras, 'extra detail')} {'hasn' if open_extras == 1 else 'haven'}'t been decided. "
+                     "They're left as they are.")
     notes_html = "".join(f"<p class='muted'>{esc(n)}</p>" for n in notes)
     back = "<a href='review'>Back to the review</a>"
     if plan.is_empty(work):
@@ -579,6 +642,7 @@ document.addEventListener('change', e => {
     else { box.hidden = true; save('review/label', {id: t.dataset.id, label: t.value, seen: t.dataset.seen}); }
   }
   else if (t.matches('input.pick')) save('review/pick', {conflict: t.dataset.conflict, choice: t.value, seen: t.dataset.seen});
+  else if (t.matches('input.extra')) save('review/extra', {id: t.dataset.id, choice: t.value});
 });
 document.addEventListener('click', e => {
   const b = e.target.closest('button.match');

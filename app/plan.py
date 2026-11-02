@@ -6,7 +6,7 @@ from collections import Counter, defaultdict
 from datetime import datetime
 
 from . import match, photos
-from .model import Contact, Value, fold, label_text
+from .model import Contact, Value, fold, label_text, without_us_country
 
 # Fields with one value per contact, and their names on the review page.
 SINGLE = {"name": "Name", "nickname": "Nickname", "company": "Company", "title": "Job title",
@@ -14,7 +14,8 @@ SINGLE = {"name": "Name", "nickname": "Nickname", "company": "Company", "title":
 # The single fields a sync can empty, when an account deleted the value since the last apply. Never the name.
 CLEARABLE = ("nickname", "company", "title", "birthday", "note")
 # Fields with any number of values, and what one value is called.
-MULTI = {"phones": "phone", "emails": "email", "addresses": "address", "urls": "website", "related": "related name"}
+MULTI = {"phones": "phone", "emails": "email", "addresses": "address", "urls": "website", "related": "related name",
+         "dates": "date"}
 MONTHS = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split()
 # Labels offered when fixing a label: only ones iCloud and Google both have. Any label already on the value
 # is offered too, so a one-sided label such as iPhone stays available.
@@ -24,6 +25,7 @@ LABEL_CHOICES = {
     "addresses": ["home", "work", "other"],
     "urls": ["homepage", "home", "work", "other"],
     "related": [],
+    "dates": ["anniversary", "other"],
 }
 _DELETED = {"text": "Deleted since the last sync", "state": "note"}
 # More contacts than this gone from one account since the last apply looks like a glitch or a mistake rather
@@ -39,8 +41,9 @@ def build(contacts: list[Contact], accounts: list[dict], decisions: dict, base: 
     user's "same"/"different" pairs, "picks", "skips" and "keeps": a skipped row leaves every account as it
     is, a skipped list value ("<person>|<field>=<value>") is left out of every account, and a kept one stays
     in every account even when an account deleted it. "pick_seen" and "skip_seen" fingerprint what a pick or
-    an unticked row was about, so it stops counting once that changes. base is what the accounts held after
-    the last apply (see base.py).
+    an unticked row was about, so it stops counting once that changes. "extras" says what happens to each
+    detail only Google can hold: "main", "notes" or "delete". base is what the accounts held after the last
+    apply (see base.py).
 
     review["sync"] holds the edits: for each person, the copies to delete, create and update, and the group
     changes, one per account and group. Skipped rows make none.
@@ -66,7 +69,7 @@ def build(contacts: list[Contact], accounts: list[dict], decisions: dict, base: 
     keyed = _decision_keys(decisions)
 
     review = {"columns": list(names.values()), "suggestions": [], "conflicts": [], "people": [], "groups": [],
-              "duplicates": [], "clusters": clusters, "sync": {"names": names, "people": {}, "groups": []},
+              "duplicates": [], "extras": [], "clusters": clusters, "sync": {"names": names, "people": {}, "groups": []},
               "warnings": [f"{gone[a]:,} contacts have gone from {names[a]} since the last sync, more than usual. "
                            "Deleting them from the other accounts waits until you tick each one, so check that "
                            "account first. Applying without ticking them leaves every account as it is, and "
@@ -89,10 +92,11 @@ def build(contacts: list[Contact], accounts: list[dict], decisions: dict, base: 
         # Decisions are filed under a person's key: their first ref when the decision was made. A new copy can
         # sort ahead of it, so a person keeps the key their decisions already use.
         key = next((r for r in refs if r in keyed), refs[0])
-        merged, conflicts = _merge(key, copies, picks, names, last)
+        merged, conflicts = _merge(key, copies, picks, names, last, decisions.get("extras", {}))
         review["conflicts"] += [{**c, "person": merged["display"]} for c in conflicts]
-        person = _Person(key, copies, merged, names, skips, keeps, last)
+        person = _Person(key, copies, merged, names, skips, keeps, last, picks)
         person.compare(duplicates, mass)
+        review["conflicts"] += [{**c, "person": merged["display"]} for c in person.conflicts]
         person.ops["held"] = refs[0] in waiting
         if not person.ops["delete"]:
             person.memberships(have, dropped, to_group, from_group, totals)
@@ -106,6 +110,8 @@ def build(contacts: list[Contact], accounts: list[dict], decisions: dict, base: 
                     "choice": duplicates.get(dup_id, ""),
                     "copies": [{**_summary(c, names), "kept": c is person.first[a]} for c in [person.first[a]] + extras],
                 })
+            if merged["extras"]["entries"]:
+                review["extras"].append({"id": key, "person": merged["display"], **merged["extras"]})
         review["sync"]["people"][key] = person.ops
         if person.rows:
             review["people"].append({"key": key, "name": merged["display"], "rows": person.rows,
@@ -123,6 +129,7 @@ def build(contacts: list[Contact], accounts: list[dict], decisions: dict, base: 
         "suggestions": len(review["suggestions"]),
         "conflicts": sum(not c["decided"] for c in review["conflicts"]),
         "duplicates": sum(not d["choice"] for d in review["duplicates"]),
+        "extras": sum(not e["choice"] for d in review["extras"] for e in d["entries"]),
     }
     return review
 
@@ -172,11 +179,18 @@ def contact_changes(c: Contact) -> dict:
     return changes
 
 
+def has_edits(edit: dict) -> bool:
+    """Whether an edit to one contact changes anything."""
+    return bool(edit["set"] or edit["photo"] or edit["add"] or edit["remove"] or edit["relabel"] or edit["respell"]
+                or edit["order"] or edit["mark_first"] or edit["company_card"] is not None or edit["drop_extras"]
+                or edit.get("carry"))
+
+
 def show(field: str, value: str) -> str:
     """A field's value as the review page shows it."""
     if not value:
         return ""
-    if field == "birthday":
+    if field in ("birthday", "dates"):
         year, month, day = value.rsplit("-", 2)
         try:
             return f"{MONTHS[int(month) - 1]} {int(day)}" + (f", {year}" if year.isdigit() else "")
@@ -229,7 +243,7 @@ class _Skips(set):
 def _decision_keys(decisions: dict) -> set[str]:
     """The person keys that unticks, picks and duplicate choices are filed under ("<account>|<id>")."""
     ids = [*decisions.get("skips", []), *decisions.get("keeps", []), *decisions.get("picks", {}),
-           *decisions.get("duplicates", {})]
+           *decisions.get("duplicates", {}), *decisions.get("extras", {})]
     return {"|".join(i.split("|", 2)[:2]) for i in ids if not i.startswith("group|")}
 
 
@@ -238,9 +252,12 @@ def _edits(person_ops: dict) -> bool:
 
 
 def _blank() -> dict:
-    """An edit to one contact: fields to set ("" empties one), the photo ({"from": ref} or "clear"), and list
-    values to add, remove, relabel and respell (write as given, once, wherever the card has that value)."""
-    return {"set": {}, "photo": None, "add": [], "remove": [], "relabel": [], "respell": []}
+    """An edit to one contact: fields to set ("" empties one), the photo ({"from": ref} or "clear"), list values
+    to add, remove, relabel and respell (write as given, once, wherever the card has that value), the order to
+    put lists in ({field: keys}), the lists whose first value iCloud marks as preferred, whether an iCloud card
+    shows as a company (None leaves it), and whether to drop what only Google can hold."""
+    return {"set": {}, "photo": None, "add": [], "remove": [], "relabel": [], "respell": [], "order": {},
+            "mark_first": [], "company_card": None, "drop_extras": False}
 
 
 def _value_op(field: str, v: Value) -> dict:
@@ -288,6 +305,10 @@ class _Last:
         old = self._contacts.get(c.ref, {}).get("fields", {}).get(field, "")
         return bool(old) and _matches(field, old, key)
 
+    def company_card(self, c: Contact) -> bool | None:
+        """Whether c showed as a company at the last apply; None if that isn't recorded."""
+        return self._contacts.get(c.ref, {}).get("company_card")
+
     def photo_changed(self, c: Contact, fp: str) -> bool:
         entry = self._contacts.get(c.ref)
         if entry is None or entry["photo"] == "?":
@@ -311,7 +332,8 @@ class _Last:
 
 # --- Working out the person every account should have ---
 
-def _merge(key: str, members: list[Contact], picks: dict, names: dict, last: _Last) -> tuple[dict, list[dict]]:
+def _merge(key: str, members: list[Contact], picks: _Picks, names: dict, last: _Last,
+           extras: dict) -> tuple[dict, list[dict]]:
     """The person as all accounts should have them, and the fields whose values disagree.
 
     merged["cleared"] maps each field (and "photo") that an account deleted since the last apply, while the
@@ -353,8 +375,9 @@ def _merge(key: str, members: list[Contact], picks: dict, names: dict, last: _La
             written = _choose(f"{key}|{field}#{v.key}", spellings, picks, set())
             if len(spellings) > 1:
                 conflicts.append(_conflict(f"{key}|{field}#{v.key}", f"How this {MULTI[field]} is written", spellings,
-                                           written, names, picks, lambda o: {"value": o["value"]}))
+                                           written, names, picks, lambda o: {"value": _text(field, o["value"])}))
             v.value, v.parts = spellings[written]["value"], spellings[written]["parts"]
+    merged["extras"] = _extra_details(key, members, merged, extras, cleared, names)
     merged["groups"] = sorted({fold(g): g for c in members for g in c.groups}.values(), key=fold)
     merged["photo"], merged["photo_from"] = _merge_photo(key, members, picks, names, conflicts, last, cleared)
     merged["cleared"] = cleared
@@ -388,11 +411,75 @@ def _spellings(field: str, key: str, members: list[Contact]) -> dict:
     for c in members:
         for x in getattr(c, field):
             if (x.key or fold(x.value)) == key:
-                parts = [p.strip() for p in x.parts]
+                parts = without_us_country([p.strip() for p in x.parts]) if field == "addresses" else []
                 value = _address_text(parts) if field == "addresses" else x.value.strip()
                 option = options.setdefault(_exact(field, value, parts), {"value": value, "parts": parts, "contacts": []})
                 option["contacts"].append(c)
+    if field == "dates":
+        _settle_years(options)
     return options
+
+
+def _text(field: str, value: str) -> str:
+    """A list value as the review page shows it."""
+    return show(field, value) if field == "dates" else value
+
+
+def _extra_details(key: str, members: list[Contact], merged: dict, decided: dict, cleared: dict, names: dict) -> dict:
+    """What to do with details only Google can hold: companies after the first, and locations. iCloud has room
+    for one company and job title and no location, so every account keeps one company and the rest go.
+
+    Each has to be decided (see "extras" in build): nothing has a default except that the company every account
+    already shows stays the main one. An exact repeat of the main company goes without asking. Once everything
+    about a person is decided, the main company replaces the merged one and moved details join the note, which
+    the usual rows then bring to every account."""
+    current = (merged["company"], merged["title"])
+    found = {}
+    for c in members:
+        for name, title in c.other_companies:
+            detail = ("company", _compare_key("company", name), _compare_key("title", title))
+            if detail[1:] != current and (detail[1] or detail[2]):
+                found.setdefault(detail, set()).add(c.account)
+        for place in c.locations:
+            found.setdefault(("location", _compare_key("company", place), ""), set()).add(c.account)
+    if not found:
+        return {"entries": [], "complete": True, "summary": "Repeat removed"}
+
+    def entry(detail: tuple, accounts: list[str], is_current: bool) -> dict:
+        entry_id = f"{key}|extra:{_fingerprint(list(detail))}"
+        return {"id": entry_id, "kind": detail[0], "name": detail[1], "title": detail[2], "current": is_current,
+                "text": ", ".join(filter(None, detail[1:])), "accounts": accounts, "choice": decided.get(entry_id, "")}
+
+    details = sorted(found)
+    entries = [entry(d, sorted(names[a] for a in found[d]), False) for d in details]
+    if any(d[0] == "company" for d in details) and any(current):
+        entries.insert(0, entry(("company", *current), [], True))
+        if not any(e["choice"] == "main" for e in entries) and not entries[0]["choice"]:
+            entries[0]["choice"] = "main"
+    complete = all(e["choice"] for e in entries)
+    summary = ""
+    if complete:
+        main = next((e for e in entries if e["choice"] == "main"), None)
+        if main and not main["current"]:
+            for field, value in (("company", main["name"]), ("title", main["title"])):
+                merged[field] = value
+                if value:
+                    cleared.pop(field, None)
+                else:
+                    cleared[field] = []
+        moved = [e for e in entries if e["choice"] == "notes"]
+        lines = [f"Location: {e['text']}" if e["kind"] == "location" else f"Also: {e['text']}" for e in moved]
+        note = merged["note"]
+        lines = [line for line in lines if line not in note.splitlines()]  # already there after a failed apply
+        if lines:
+            merged["note"] = "\n".join(filter(None, [note, *lines]))
+            cleared.pop("note", None)
+        gone = [e["text"] for e in entries if e["choice"] == "delete"]
+        summary = " ".join(filter(None, (
+            f"Main company: {main['text']}." if main and not main["current"] else "",
+            f"Moved to Notes: {'; '.join(e['text'] for e in moved)}." if moved else "",
+            f"Deleted: {'; '.join(gone)}." if gone else ""))) or "Removed"
+    return {"entries": entries, "complete": complete, "summary": summary}
 
 
 def _exact(field: str, value: str, parts: list[str]) -> str:
@@ -528,9 +615,10 @@ class _Person:
     and the one kept if the copies are merged."""
 
     def __init__(self, key: str, copies: list[Contact], merged: dict, names: dict, skips: _Skips, keeps: set,
-                 last: _Last):
+                 last: _Last, picks: _Picks):
         self.key, self.merged, self.names = key, merged, names
-        self.skips, self.keeps, self.last = skips, keeps, last
+        self.skips, self.keeps, self.last, self.picks = skips, keeps, last, picks
+        self.conflicts: list[dict] = []  # choices that depend on what's kept, such as the order of a list
         by_account = defaultdict(list)
         for c in copies:
             by_account[c.account].append(c)
@@ -562,13 +650,14 @@ class _Person:
             if duplicates.get(f"{self.key}|dup:{a}") == "merge":
                 self._merge_row(a)
         self._single_rows()
+        self._company_card_row()
+        self._extras_row()
         self._photo_row()
         for field, noun in MULTI.items():
             self._list_rows(field, noun)
             self._written_rows(field, noun)
-        self.ops["update"] = {a: {"ref": self.first[a].ref, **e} for a, e in self.edits.items()
-                              if e["set"] or e["photo"] or e["add"] or e["remove"] or e["relabel"] or e["respell"]
-                              or e.get("carry")}
+            self._order_rows(field, noun)
+        self.ops["update"] = {a: {"ref": self.first[a].ref, **e} for a, e in self.edits.items() if has_edits(e)}
 
     def memberships(self, have: dict, dropped: set, to_group, from_group, totals) -> None:
         """Note the groups the person joins in each account, and the ones they leave everywhere because an
@@ -638,7 +727,51 @@ class _Person:
         changes["add"] = [_value_op(f, v) for f in MULTI for v in m[f] if self._kept(f, v)]
         if m["photo"]:
             changes["photo"] = {"from": m["photo_from"]}
+        changes["company_card"] = self._company_card()
         return changes
+
+    def _company_card(self) -> bool | None:
+        """Whether this person's iCloud cards should show as a company; None with no iCloud card to go by. A card
+        changed since the last apply decides; otherwise any card showing as a company does."""
+        cards = [c for a, c in self.first.items() if a.startswith("icloud:")]
+        if not cards:
+            return None
+        changed = [c for c in cards if self.last.company_card(c) not in (None, c.company_card)]
+        return any(c.company_card for c in (changed or cards))
+
+    def _company_card_row(self) -> None:
+        """A row when iCloud accounts disagree on showing the person as a company. Google has no such setting."""
+        want = self._company_card()
+        cards = {a: c for a, c in self.first.items() if a.startswith("icloud:")}
+        changing = [a for a, c in cards.items() if c.company_card != want]
+        if not changing:
+            return
+        word = {True: "Company", False: "Person"}
+        cells = {self.names[a]: [{"text": "—"}] for a in self.first}
+        cells |= {self.names[a]: _now(word[c.company_card], word[want], a in changing) for a, c in cards.items()}
+        after = {"kind": "text", "value": f"{word[want]} card in every iCloud account"}
+        row = self._row(f"{self.key}|companycard", "Shown as", cells, changing, after,
+                        basis=sorted([a, c.company_card] for a, c in cards.items()))
+        if not row["skipped"]:
+            for a in changing:
+                self.edits[a]["company_card"] = want
+
+    def _extras_row(self) -> None:
+        """A row taking what only Google can hold off its cards, once everything about the person is decided."""
+        extras = self.merged["extras"]
+        holding = {a: c for a, c in self.first.items() if c.other_companies or c.locations}
+        if not holding or not extras["complete"]:
+            return
+        cells = {self.names[a]: [{"text": "—"}] for a in self.first}
+        for a, c in holding.items():
+            held = [", ".join(filter(None, company)) for company in c.other_companies] + list(c.locations)
+            cells[self.names[a]] = [{"text": text, "state": "old"} for text in held]
+        row = self._row(f"{self.key}|extras", "Other companies and locations", cells, list(holding),
+                        {"kind": "text", "value": extras["summary"]},
+                        basis=sorted([a, c.other_companies, c.locations] for a, c in holding.items()))
+        if not row["skipped"]:
+            for a in holding:
+                self.edits[a]["drop_extras"] = True
 
     def _single_rows(self) -> None:
         cleared = self.merged["cleared"]
@@ -696,17 +829,17 @@ class _Person:
         held = {a: v[field] for a, v in self.values.items()}
         for v in self.merged[field]:
             holders = {a: h[v.key] for a, h in held.items() if v.key in h}
-            changing = [a for a, m in holders.items() if v.label and m.label.lower() != v.label.lower()]
+            changing = [a for a, m in holders.items() if v.label and (m.odd or m.label.lower() != v.label.lower())]
             if changing:
                 row_id = f"{self.key}|{field}~{v.key}"  # also the id of the label picked in the dropdown
                 seen = {m.label for m in holders.values() if m.label}
                 options = list(dict.fromkeys(LABEL_CHOICES[field] + sorted(seen, key=str.lower) + [v.label]))
-                cells = {self.names[a]: _now("PREF" if m.odd else label_text(m.label), label_text(v.label), a in changing)
+                cells = {self.names[a]: _now(_label_held(m), label_text(v.label), a in changing)
                          for a, m in holders.items()}
                 labels_held = self.merged["labels_held"][f"{field}~{v.key}"]
                 after = {"kind": "label", "id": row_id, "options": [(o, label_text(o)) for o in options],
                          "chosen": v.label, "seen": _fingerprint(labels_held)}
-                row = self._row(row_id, f"Label of {v.value}", cells, changing, after, basis=labels_held)
+                row = self._row(row_id, f"Label of {_text(field, v.value)}", cells, changing, after, basis=labels_held)
                 if not row["skipped"] and self._kept(field, v):
                     for a in changing:
                         self.edits[a]["relabel"].append({"field": field, "key": v.key, "label": v.label})
@@ -724,10 +857,11 @@ class _Person:
             cells = {}
             for a, h in held.items():
                 # What the account has, with values being left out marked "old", then values it would gain as "new".
-                now = [{"text": h[v.key].value, "state": "" if v.key in kept else "old"} for v in values if v.key in h]
-                now += [{"text": v.value, "state": "new"} for v in values if v.key in kept and v.key not in h]
+                now = [{"text": _text(field, h[v.key].value), "state": "" if v.key in kept else "old"}
+                       for v in values if v.key in h]
+                now += [{"text": _text(field, v.value), "state": "new"} for v in values if v.key in kept and v.key not in h]
                 cells[self.names[a]] = now or [{"text": "—"}]
-            items = [{"id": f"{self.key}|{field}={v.key}", "text": v.value, "kept": v.key in kept,
+            items = [{"id": f"{self.key}|{field}={v.key}", "text": _text(field, v.value), "kept": v.key in kept,
                       "note": self._deleted_note(field, v.key)} for v in values]
             row = self._row(f"{self.key}|{field}:{label.lower()}", title[0].upper() + title[1:], cells, changing,
                             {"kind": "values", "items": items},
@@ -753,17 +887,86 @@ class _Person:
             changing = [a for a, texts in exact.items() if texts and texts != [target]]
             if not changing:
                 continue
+            shown = _text(field, v.value)
             cells = {}
             for a, xs in lines.items():
                 if a in changing:
-                    cells[self.names[a]] = _now(_as_written(field, xs), v.value, True)
+                    cells[self.names[a]] = _now(_as_written(field, xs), shown, True)
                 else:
-                    cells[self.names[a]] = [{"text": v.value if xs else "—"}]
+                    cells[self.names[a]] = [{"text": shown if xs else "—"}]
             row = self._row(f"{self.key}|{field}#{v.key}", f"How this {noun} is written", cells, changing,
-                            {"kind": "text", "value": v.value}, basis=sorted([a, texts] for a, texts in exact.items()))
+                            {"kind": "text", "value": shown}, basis=sorted([a, texts] for a, texts in exact.items()))
             if not row["skipped"]:
                 for a in changing:
                     self.edits[a]["respell"].append({"field": field, "key": v.key, "value": v.value, "parts": list(v.parts)})
+
+    def _order_rows(self, field: str, noun: str) -> None:
+        """Every account lists a person's values in the same order. When accounts disagree, the review asks which
+        to use, with nothing chosen for you, and until it's answered each account's order stays as it is. Once the
+        order is settled, an account gaining a value or losing a repeat is written in it too, and iCloud's
+        preferred marker goes on the first value wherever either iCloud account has one."""
+        kept = [v for v in self.merged[field] if self._kept(field, v)]
+        if len(kept) < 2:
+            return
+        keys = [v.key for v in kept]
+        now = {a: list(dict.fromkeys(x.key or fold(x.value) for x in getattr(c, field))) for a, c in self.first.items()}
+        now = {a: [k for k in held if k in keys] for a, held in now.items()}
+        text = {v.key: _text(field, v.value) for v in kept}
+        plural = noun + ("es" if noun.endswith("s") else "s")
+        order = _agreed_order(keys, list(now.values()))
+        row_id = f"{self.key}|{field}@order"
+        if order is None:
+            options = {}
+            for a, held in now.items():
+                if len(held) >= 2:  # an account holding fewer than two of the values has no order to go by
+                    listed = held + [k for k in keys if k not in held]
+                    option = options.setdefault(_fingerprint(listed), {"order": listed, "contacts": []})
+                    option["contacts"].append(self.first[a])
+            chosen = self.picks.get(row_id, options)
+            chosen = chosen if chosen in options else None
+            self.conflicts.append({**_conflict(row_id, f"Order of {plural}", options, chosen, self.names, self.picks,
+                                               lambda o: {"value": " · ".join(text[k] for k in o["order"])}),
+                                   "required": True})
+            if chosen is None:
+                return
+            order = options[chosen]["order"]
+            changing = [a for a, held in now.items() if held != [k for k in order if k in held]]
+            cells = {self.names[a]: [{"text": " · ".join(text[k] for k in held) or "—",
+                                      "state": "old" if a in changing else ""}]
+                     + ([{"text": " · ".join(text[k] for k in order), "state": "new"}] if a in changing else [])
+                     for a, held in now.items()}
+            row = self._row(row_id, f"Order of {plural}", cells, changing,
+                            {"kind": "text", "value": " · ".join(text[k] for k in order)},
+                            basis=sorted([a, held] for a, held in now.items()))
+            if row["skipped"]:
+                return
+        icloud = {a: getattr(c, field) for a, c in self.first.items() if a.startswith("icloud:")}
+        marked = any(x.pref for values in icloud.values() for x in values)
+        for a, c in self.first.items():
+            repeats = len(getattr(c, field)) != len(now[a])
+            if now[a] != order or repeats:
+                self.edits[a]["order"][field] = order
+                if marked and a in icloud:
+                    self.edits[a]["mark_first"].append(field)
+        if self.ops["create"]:
+            self.ops["create"]["contact"]["order"][field] = order
+            if marked:
+                self.ops["create"]["contact"]["mark_first"].append(field)
+        if not marked:
+            return
+        unmarked = [a for a, values in icloud.items() if field not in self.edits[a]["mark_first"]
+                    and not (values and values[0].pref and not any(x.pref for x in values[1:]))]
+        if unmarked:
+            word = {True: f"First {noun} marked", False: "None marked"}
+            cells = {self.names[a]: [{"text": "—"}] for a in self.first}
+            cells |= {self.names[a]: _now(word[any(x.pref for x in values)], word[True], a in unmarked)
+                      for a, values in icloud.items()}
+            row = self._row(f"{self.key}|{field}@preferred", f"Preferred {noun}", cells, unmarked,
+                            {"kind": "text", "value": f"First {noun} marked in every iCloud account"},
+                            basis=sorted([a, [x.pref for x in values]] for a, values in icloud.items()))
+            if not row["skipped"]:
+                for a in unmarked:
+                    self.edits[a]["mark_first"].append(field)
 
     def _kept(self, field: str, v: Value) -> bool:
         """Whether every account ends up with this value: unless it's unticked, or an account deleted it since
@@ -779,10 +982,34 @@ class _Person:
         return f"Deleted from {', '.join(self.names[a] for a in by)} since the last sync" if by else ""
 
 
+def _agreed_order(keys: list[str], orders: list[list[str]]) -> list[str] | None:
+    """The one order that keeps every account's own order, or None if they disagree. Accounts holding different
+    values can still agree: x, y in one and x, z in another fits x, y, z. Values it leaves open keep keys' order."""
+    before = {k: set() for k in keys}
+    for order in orders:
+        for earlier, later in zip(order, order[1:]):
+            before[later].add(earlier)
+    remaining, result = list(keys), []
+    while remaining:
+        free = next((k for k in remaining if not before[k] & set(remaining)), None)
+        if free is None:
+            return None
+        result.append(free)
+        remaining.remove(free)
+    return result
+
+
+def _label_held(v: Value) -> str:
+    """The label an account has on a value now, as it's written if it's an odd one."""
+    if v.odd:
+        return v.odd if isinstance(v.odd, str) else "PREF"  # records from an older version say only that it was odd
+    return label_text(v.label)
+
+
 def _as_written(field: str, values: list[Value]) -> str:
     """How an account writes a value now, saying so if it's there more than once or has stray spaces."""
     texts = [_address_text(v.parts) if field == "addresses" else v.value for v in values]
-    tidy = list(dict.fromkeys(" ".join(t.split()) for t in texts))
+    tidy = list(dict.fromkeys(_text(field, " ".join(t.split())) for t in texts))
     notes = [f"listed {len(values)} times"] if len(values) > 1 else []
     if any(t != " ".join(t.split()) for t in texts) or any(p != p.strip() for v in values for p in v.parts):
         notes.append("extra space")
@@ -873,6 +1100,7 @@ def _summary(c: Contact, names: dict) -> dict:
     lines += [f"{v.value} ({label_text(v.label)})" for v in c.related]
     if c.birthday:
         lines.append("Birthday " + show("birthday", c.birthday))
+    lines += [f"{show('dates', v.value)} ({label_text(v.label)})" for v in c.dates]
     if c.groups:
         lines.append("Groups: " + ", ".join(c.groups))
     if c.note.strip():

@@ -1,22 +1,22 @@
 """Reading and writing Google contacts."""
-from .model import LABEL_NAMES, Contact, Value, address_key, email_key, fold, label, phone_key, url_key
+from .model import LABEL_NAMES, Contact, Value, address_key, date_key, email_key, fold, label, phone_key, url_key
 
 NAME_KEYS = ("honorificPrefix", "givenName", "middleName", "familyName", "honorificSuffix")
 # Google Contacts lists, and counts, only the contacts in this group. Others are found only through a label.
 MY_CONTACTS = "contactGroups/myContacts"
 # Each list field's name in the People API.
 LISTS = {"phones": "phoneNumbers", "emails": "emailAddresses", "addresses": "addresses", "urls": "urls",
-         "related": "relations"}
+         "related": "relations", "dates": "events"}
 _KEYS = {"phones": phone_key, "emails": email_key, "urls": url_key, "related": fold}
 # Fields the sync doesn't merge field by field. Merging copies of a person in one account carries them over.
-CARRIED = ("events", "imClients", "userDefined", "calendarUrls", "externalIds", "locations", "miscKeywords",
+CARRIED = ("imClients", "userDefined", "calendarUrls", "externalIds", "locations", "miscKeywords",
            "sipAddresses", "occupations", "interests")
 # Google's own types, which it translates when showing them. Any other label is stored as typed.
 _TYPES = {t.lower(): t for t in (
     "home", "work", "mobile", "homeFax", "workFax", "otherFax", "pager", "workMobile", "workPager", "main",
     "googleVoice", "other", "blog", "profile", "homePage", "ftp", "reservations", "appInstallPage", "spouse",
     "child", "mother", "father", "parent", "brother", "sister", "friend", "relative", "domesticPartner",
-    "manager", "assistant", "referredBy", "partner")}
+    "manager", "assistant", "referredBy", "partner", "anniversary")}
 
 
 def read(account: str, person: dict, group_names: dict[str, str]) -> tuple[Contact, str]:
@@ -31,11 +31,9 @@ def read(account: str, person: dict, group_names: dict[str, str]) -> tuple[Conta
         c.nickname = nicknames[0].get("value", "")
     if orgs := _own(person.get("organizations")):
         c.company, c.title = orgs[0].get("name", ""), orgs[0].get("title", "")
-    for entry in _own(person.get("birthdays")):
-        d = entry.get("date") or {}
-        if d.get("month") and d.get("day"):
-            c.birthday = (f"{d['year']:04d}" if d.get("year") else "-") + f"-{d['month']:02d}-{d['day']:02d}"
-            break
+        c.other_companies = [[o.get("name", ""), o.get("title", "")] for o in orgs[1:]]
+    c.locations = [e["value"] for e in _own(person.get("locations")) if e.get("value")]
+    c.birthday = next(filter(None, (_date_text(e.get("date") or {}) for e in _own(person.get("birthdays")))), "")
     if notes := _own(person.get("biographies")):
         c.note = notes[0].get("value", "")
     for field, name in LISTS.items():
@@ -68,7 +66,16 @@ def edit(person: dict, changes: dict, carry: list[dict] = ()) -> tuple[dict, lis
         extra = [e for i, e in enumerate(extra) if e not in seen and e not in extra[:i]]
         if extra:
             body[field] = mine + extra
-    sources = [s for s in person.get("metadata", {}).get("sources", []) if s.get("type") == "CONTACT"]
+    if changes["drop_extras"]:  # the first company stays, already brought up to date
+        body["organizations"] = body.get("organizations", [dict(e) for e in _own(person.get("organizations"))])[:1]
+        if _own(person.get("locations")):
+            body["locations"] = []
+    elif carried := [_bare(e) for other in carry for e in _own(other.get("organizations"))]:
+        # Other companies on a card being merged stay on the card kept, for the review to ask about.
+        mine = body.get("organizations", [dict(e) for e in _own(person.get("organizations"))])
+        have = [(e.get("name", ""), e.get("title", "")) for e in mine]
+        body["organizations"] = mine + [e for e in carried if (e.get("name", ""), e.get("title", "")) not in have]
+    sources =[s for s in person.get("metadata", {}).get("sources", []) if s.get("type") == "CONTACT"]
     return {**body, "etag": person.get("etag", ""), "metadata": {"sources": sources}}, sorted(body)
 
 
@@ -77,16 +84,9 @@ def new(changes: dict) -> dict:
     return {k: v for k, v in _changed({}, changes).items() if v}
 
 
-def backup_details(person: dict) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
-    """What a backup's .vcf holds beyond the details the sync compares: dates as (YYYY-MM-DD, type), with 1604
-    as Apple's placeholder for an unknown year, and companies after the first as (name, title)."""
-    dates = []
-    for entry in _own(person.get("events")):
-        d = entry.get("date") or {}
-        if d.get("month") and d.get("day"):
-            dates.append((f"{d.get('year') or 1604:04d}-{d['month']:02d}-{d['day']:02d}", entry.get("type", "")))
-    companies = [(o.get("name", ""), o.get("title", "")) for o in _own(person.get("organizations"))[1:]]
-    return dates, companies
+def backup_companies(person: dict) -> list[tuple[str, str]]:
+    """What a backup's .vcf holds beyond the details the sync compares: companies after the first, as (name, title)."""
+    return [(o.get("name", ""), o.get("title", "")) for o in _own(person.get("organizations"))[1:]]
 
 
 def google_type(value_label: str) -> str:
@@ -113,11 +113,9 @@ def _changed(person: dict, changes: dict) -> dict:
     if "birthday" in s:
         entries = own("birthdays")
         if s["birthday"]:
-            year, month, day = s["birthday"].rsplit("-", 2)
-            date = {"month": int(month), "day": int(day)} | ({"year": int(year)} if year.isdigit() else {})
             entry = entries[0] if entries else {}
             entry.pop("text", None)
-            body["birthdays"] = [{**entry, "date": date}]
+            body["birthdays"] = [{**entry, "date": _date(s["birthday"])}]
         else:
             body["birthdays"] = []
     if "note" in s:
@@ -129,7 +127,8 @@ def _changed(person: dict, changes: dict) -> dict:
         relabel = {r["key"]: r["label"] for r in changes["relabel"] if r["field"] == field}
         respell = {r["key"]: r for r in changes["respell"] if r["field"] == field}
         adding = [a for a in changes["add"] if a["field"] == field]
-        if not (removing or relabel or respell or adding):
+        order = changes["order"].get(field)
+        if not (removing or relabel or respell or adding or order):
             continue
         current = own(name)
         last = {_key(field, e): i for i, e in enumerate(current)}  # the one a repeated value keeps
@@ -145,7 +144,19 @@ def _changed(person: dict, changes: dict) -> dict:
                 e["type"] = google_type(relabel[key])
             entries.append(e)
         body[name] = entries + [_entry(field, a) for a in adding]
+        if order:
+            body[name] = _in_order(field, body[name], order)
     return body
+
+
+def _in_order(field: str, entries: list[dict], order: list[str]) -> list[dict]:
+    """Entries in the given order, with Google's primary marker on the first."""
+    rank = {key: i for i, key in enumerate(order)}
+    ordered = sorted(entries, key=lambda e: rank.get(_key(field, e), len(rank)))
+    for i, entry in enumerate(ordered):
+        metadata = {k: v for k, v in entry.get("metadata", {}).items() if k not in ("primary", "sourcePrimary")}
+        entry["metadata"] = {**metadata, **({"sourcePrimary": True} if i == 0 else {})}
+    return ordered
 
 
 def _key(field: str, entry: dict) -> str:
@@ -153,9 +164,24 @@ def _key(field: str, entry: dict) -> str:
     return v.key or fold(v.value)
 
 
+def _date_text(d: dict) -> str:
+    """A Google date as "YYYY-MM-DD", or "--MM-DD" with no year; "" if it has no month and day."""
+    if not (d.get("month") and d.get("day")):
+        return ""
+    return (f"{d['year']:04d}" if d.get("year") else "-") + f"-{d['month']:02d}-{d['day']:02d}"
+
+
+def _date(text: str) -> dict:
+    """A date as Google takes it."""
+    year, month, day = text.rsplit("-", 2)
+    return {"month": int(month), "day": int(day)} | ({"year": int(year)} if year.isdigit() else {})
+
+
 def _rewritten(field: str, entry: dict, written: dict) -> dict:
     """An entry holding a value as written, keeping its label and anything else on it. Google works out an
     address's formatted text again from the parts, and its country code from a changed country."""
+    if field == "dates":
+        return {**entry, "date": _date(written["value"])}
     if field != "addresses":
         name = "person" if field == "related" else "value"
         return {**{k: v for k, v in entry.items() if k != "canonicalForm"}, name: written["value"]}
@@ -193,6 +219,8 @@ def _entry(field: str, value: dict) -> dict:
         entry = {k: v for k, v in (("streetAddress", first), ("extendedAddress", rest.replace("\n", ", ")),
                                    ("city", city), ("region", region), ("postalCode", postcode),
                                    ("country", country)) if v}
+    elif field == "dates":
+        entry = {"date": _date(value["value"])}
     else:
         entry = {"person" if field == "related" else "value": value["value"]}
     if value["label"]:
@@ -215,5 +243,8 @@ def _value(field: str, entry: dict) -> Value:
         if not any(parts):  # typed as free text, which counts as the street, where it goes in another account
             street = parts[0] = text
         return Value(text, tag, address_key(street, parts[1], parts[3], parts[2]) if text else "", parts, odd)
+    if field == "dates":
+        value = _date_text(entry.get("date") or {})
+        return Value(value, tag, date_key(value), odd=odd)
     value = entry.get("person" if field == "related" else "value", "")
     return Value(value, tag, _KEYS[field](value), odd=odd)

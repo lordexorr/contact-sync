@@ -72,6 +72,7 @@ def _entry(c: Contact) -> dict:
     return {
         "fields": {f: c.name() if f == "name" else getattr(c, f) for f in plan.SINGLE},
         "photo": c.photo,
+        "company_card": c.company_card,
         "lists": {f: {k: v.label for v in getattr(c, f) if (k := v.key or fold(v.value))} for f in plan.MULTI},
         "groups": sorted({fold(g) for g in c.groups}),
     }

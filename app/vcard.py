@@ -4,12 +4,13 @@ import re
 from collections import defaultdict
 from datetime import datetime, timezone
 
-from .model import Contact, Value, address_key, email_key, fold, label, label_text, phone_key, url_key
+from .model import Contact, Value, address_key, date_key, email_key, fold, label, label_text, phone_key, url_key
 
-_LINE = re.compile(r"^(?:(?P<group>[^.:;]+)\.)?(?P<name>[^:;]+)(?P<params>(?:;[^:]*)?):(?P<value>.*)$")
+_LINE =re.compile(r"^(?:(?P<group>[^.:;]+)\.)?(?P<name>[^:;]+)(?P<params>(?:;[^:]*)?):(?P<value>.*)$")
 _NOT_LABELS = {"voice", "pref", "internet", "x400"}  # TYPE values that don't say which label a value has
 # The vCard property behind each list field, and how its values are compared.
-_PROPS = {"phones": "TEL", "emails": "EMAIL", "addresses": "ADR", "urls": "URL", "related": "X-ABRELATEDNAMES"}
+_PROPS = {"phones": "TEL", "emails": "EMAIL", "addresses": "ADR", "urls": "URL", "related": "X-ABRELATEDNAMES",
+          "dates": "X-ABDATE"}
 _FIELDS = {prop: field for field, prop in _PROPS.items()}
 _KEYS = {"TEL": phone_key, "EMAIL": email_key, "URL": url_key, "X-ABRELATEDNAMES": fold}
 
@@ -125,16 +126,23 @@ def _contact(account: str, href: str, props) -> tuple[Contact, tuple[str, object
             c.note = unescape(raw)
         elif name == "REV":
             c.updated = raw
+        elif name == "X-ABSHOWAS":
+            c.company_card = raw.strip().upper() == "COMPANY"
         elif name in _FIELDS:
-            if v := _list_value(name, raw, tag, odd):
+            if v := _list_value(name, raw, tag, odd, params):
+                v.pref = any(t.lower() == "pref" for t in params.get("TYPE", []))
                 getattr(c, _FIELDS[name]).append(v)
         elif name == "PHOTO":
             photo = _photo(raw)
     return c, photo
 
 
-def _list_value(name: str, raw: str, tag: str = "", odd: bool = False) -> Value | None:
-    """The value on a phone, email, address, website or related-name line; None for an empty address."""
+def _list_value(name: str, raw: str, tag: str = "", odd: str = "", params: dict | None = None) -> Value | None:
+    """The value on a phone, email, address, website, related-name or date line; None for an empty address or a
+    date that can't be read."""
+    if name == "X-ABDATE":
+        date = _birthday(raw, params or {})
+        return Value(date, tag, date_key(date), odd=odd) if date else None
     if name != "ADR":
         value = unescape(raw)
         return Value(value, tag, _KEYS[name](value), odd=odd)
@@ -199,7 +207,7 @@ _ALWAYS = {"EMAIL": ["INTERNET"]}  # TYPE values a line keeps whatever its label
 # Apple's built-in labels, which it writes as _$!<Name>!$_ on the X-ABLabel line.
 _APPLE = {name.lower(): name for name in (
     "Other", "HomePage", "Father", "Mother", "Parent", "Brother", "Sister", "Child", "Friend", "Spouse", "Partner",
-    "Assistant", "Manager")}
+    "Assistant", "Manager", "Anniversary")}
 _LABEL_TYPES = {"home", "work", "cell", "iphone", "main", "pager", "fax", "other", "voice"}  # TYPE values that make a label
 # Lines that describe the card's photo, which go when the photo is replaced and never move to another card.
 _PHOTO_LINES = {"PHOTO", "X-IMAGEHASH", "X-IMAGETYPE"}
@@ -210,7 +218,7 @@ _NOT_CARRIED = {"BEGIN", "END", "VERSION", "PRODID", "UID", "REV", "N", "FN", "N
                 "X-ABADR"} | _PHOTO_LINES | set(_PROPS.values())
 # Details a card can hold several of, so a merge adds any the kept card lacks. Of any other detail, such as
 # a gender, the kept card's own stays when it has one.
-_MANY = {"X-ABDATE", "X-SOCIALPROFILE", "IMPP", "X-AIM", "X-JABBER", "X-MSN", "X-YAHOO", "X-ICQ", "X-SKYPE",
+_MANY = {"X-SOCIALPROFILE", "IMPP", "X-AIM", "X-JABBER", "X-MSN", "X-YAHOO", "X-ICQ", "X-SKYPE",
          "X-QQ", "X-GADUGADU", "CATEGORIES"}
 
 
@@ -239,19 +247,22 @@ def edit(text: str, changes: dict, photo: tuple[bytes, str] | None = None,
         _add(card, value)
     for other in carry:
         _carry(card, other)
+    for field, order in changes["order"].items():
+        _put_in_order(card, _PROPS[field], order)
+    for field in changes["mark_first"]:
+        _mark_first(card, _PROPS[field])
+    if changes["company_card"] is not None:
+        if not changes["company_card"]:
+            card.drop(p[0] for p in card.find("X-ABSHOWAS"))
+        elif not card.find("X-ABSHOWAS"):
+            card.insert("X-ABShowAs:COMPANY")
     card.put("REV", datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))  # when the card last changed
     return card.text()
 
 
-def with_backup_details(text: str, dates: list[tuple[str, str]], companies: list[tuple[str, str]]) -> str:
-    """A vCard with details only a backup carries: dates as (YYYY-MM-DD, type), and further companies as
-    (name, title)."""
+def with_companies(text: str, companies: list[tuple[str, str]]) -> str:
+    """A vCard with further companies, as (name, title), which only a backup carries."""
     card = _Card(text)
-    for date, kind in dates:
-        group = f"item{card.next_item()}"
-        omit = ";X-APPLE-OMIT-YEAR=1604" if date.startswith("1604-") else ""
-        shown = "_$!<Anniversary>!$_" if kind.lower() == "anniversary" else _esc(kind or "other")
-        card.insert(f"{group}.X-ABDATE{omit}:{date}", f"{group}.X-ABLabel:{shown}")
     for name, title in companies:
         card.insert(*([f"ORG:{_esc(name)}"] if name else []), *([f"TITLE:{_esc(title)}"] if title else []))
     return card.text()
@@ -372,12 +383,12 @@ def _edit_lists(card: _Card, changes: dict) -> None:
         return
     next_item = card.next_item()
     last = {}
-    for i, _, name, _, raw in card.props():
-        if name in _FIELDS and (v := _list_value(name, raw)):
+    for i, _, name, params, raw in card.props():
+        if name in _FIELDS and (v := _list_value(name, raw, params=params)):
             last[(_FIELDS[name], v.key or fold(v.value))] = i
     gone_lines, gone_groups, rewritten, relabelled = set(), set(), {}, set()
     for i, group, name, params, raw in card.props():
-        if name not in _FIELDS or not (v := _list_value(name, raw)):
+        if name not in _FIELDS or not (v := _list_value(name, raw, params=params)):
             continue
         key = (_FIELDS[name], v.key or fold(v.value))
         if key in removing or (key in respell and i != last[key]):
@@ -388,14 +399,18 @@ def _edit_lists(card: _Card, changes: dict) -> None:
                 gone_lines.add(i)
             continue
         written = _raw_value(name, respell[key], raw) if key in respell else raw
+        # A date's line says whether its year is real, so that goes with the date being written.
+        line_params = _date_params(params, respell[key]["value"]) if name == "X-ABDATE" and key in respell else params
         if key in relabel:
             types, ablabel = _label(name, relabel[key])
             kept = [t for t in params.get("TYPE", []) if t.lower() not in _LABEL_TYPES]
             if ablabel and not group:
                 group, next_item = f"item{next_item}", next_item + 1
-            rewritten[i] = (_head(group, name, {**params, "TYPE": _unique(kept + types)}) + ":" + written, group, ablabel)
+            rewritten[i] = (_head(group, name, {**line_params, "TYPE": _unique(kept + types)}) + ":" + written, group, ablabel)
             if group:
                 relabelled.add(group.lower())
+        elif line_params != params:
+            rewritten[i] = (_head(group, name, line_params) + ":" + written, group, "")
         elif written != raw:
             rewritten[i] = (card.lines[i][:_LINE.match(card.lines[i]).start("value")] + written, group, "")
     lines = []
@@ -414,6 +429,34 @@ def _edit_lists(card: _Card, changes: dict) -> None:
         else:
             lines.append(line)
     card.lines = lines
+
+
+def _value_lines(card: _Card, name: str) -> list[tuple]:
+    """The property lines holding a readable value of this kind, as (index, group, NAME, params, raw, key)."""
+    found = []
+    for i, group, line_name, params, raw in card.props():
+        if line_name == name and (v := _list_value(name, raw, params=params)):
+            found.append((i, group, line_name, params, raw, v.key or fold(v.value)))
+    return found
+
+
+def _put_in_order(card: _Card, name: str, order: list[str]) -> None:
+    """Put a list's value lines in order, in the places they already take. A label stays with its value through
+    the itemN group they share, wherever its line is."""
+    rank = {key: i for i, key in enumerate(order)}
+    found = _value_lines(card, name)
+    lines = [card.lines[p[0]] for p in sorted(found, key=lambda p: rank.get(p[5], len(rank)))]
+    for p, line in zip(found, lines):
+        card.lines[p[0]] = line
+
+
+def _mark_first(card: _Card, name: str) -> None:
+    """Mark a list's first value as preferred, and no other."""
+    for n, (i, group, _, params, raw, _key) in enumerate(_value_lines(card, name)):
+        types = params.get("TYPE", [])
+        wanted = [t for t in types if t.lower() != "pref"] + (["pref"] if n == 0 else [])
+        if {t.lower() for t in wanted} != {t.lower() for t in types}:
+            card.lines[i] = _head(group, name, {**params, "TYPE": wanted}) + ":" + raw
 
 
 def _carry(card: _Card, other: str) -> None:
@@ -447,14 +490,23 @@ def _add(card: _Card, value: dict) -> None:
     name = _PROPS[value["field"]]
     types, ablabel = _label(name, value["label"])
     group = f"item{card.next_item()}" if ablabel else ""
-    lines = [_head(group, name, {"TYPE": types}) + ":" + _raw_value(name, value)]
+    params = _date_params({"TYPE": types}, value["value"]) if name == "X-ABDATE" else {"TYPE": types}
+    lines = [_head(group, name, params) + ":" + _raw_value(name, value)]
     if ablabel:
         lines.append(f"{group}.X-ABLabel:{_esc(ablabel)}")
     card.insert(*lines)
 
 
+def _date_params(params: dict, date: str) -> dict:
+    """A date line's parameters: Apple stores a date without a year under a placeholder year, named here."""
+    kept = {k: v for k, v in params.items() if k != "X-APPLE-OMIT-YEAR"}
+    return {**kept, "X-APPLE-OMIT-YEAR": ["1604"]} if date.startswith("--") else kept
+
+
 def _raw_value(name: str, value: dict, raw: str = "") -> str:
     """A list value as its vCard line writes it. An address replacing raw keeps what comes before the street."""
+    if name == "X-ABDATE":
+        return "1604" + value["value"][1:] if value["value"].startswith("--") else value["value"]
     if name == "ADR":
         parts = (list(value["parts"]) + [""] * 5)[:5]  # street, city, region, postcode, country
         before = (re.split(r"(?<!\\);", raw)[:2] + ["", ""])[:2] if raw else ["", ""]

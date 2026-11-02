@@ -4,14 +4,16 @@ import unicodedata
 from dataclasses import asdict, dataclass, field
 
 # Labels left behind by other sync tools. They count as no label, so the review suggests a real one.
-ODD_LABELS = {"pref"}
+ODD_LABELS = {"pref", "x-personal", "email"}
+# Labels typed in place of a standard one. They count as that one, and the review fixes what's stored.
+NEAR_LABELS = {"fax": "otherfax"}
 
 # Standard labels as stored here, and how the review page shows them. Any other label is custom, kept as typed.
 LABEL_NAMES = {
     "mobile": "mobile", "iphone": "iPhone", "home": "home", "work": "work", "main": "main", "other": "other",
     "homefax": "home fax", "workfax": "work fax", "otherfax": "other fax", "pager": "pager",
     "workmobile": "work mobile", "workpager": "work pager", "googlevoice": "Google Voice", "school": "school",
-    "homepage": "homepage", "blog": "blog", "profile": "profile",
+    "homepage": "homepage", "blog": "blog", "profile": "profile", "anniversary": "anniversary",
 }
 
 _APPLE_LABEL = re.compile(r"^_\$!<(.+)>!\$_$")  # Apple's built-in labels, such as _$!<Mobile>!$_
@@ -21,6 +23,7 @@ _STREET_WORDS = {
     "place": "pl", "terrace": "ter", "highway": "hwy", "route": "rte", "parkway": "pkwy", "circle": "cir",
     "north": "n", "south": "s", "east": "e", "west": "w", "apartment": "apt", "suite": "ste",
 }
+_US_COUNTRY = {"us", "u s", "usa", "u s a", "united states", "united states of america"}  # as fold leaves them
 _US_STATES = {
     "al": "alabama", "ak": "alaska", "az": "arizona", "ar": "arkansas", "ca": "california", "co": "colorado",
     "ct": "connecticut", "de": "delaware", "dc": "district of columbia", "fl": "florida", "ga": "georgia",
@@ -36,13 +39,14 @@ _US_STATES = {
 
 @dataclass
 class Value:
-    """One phone number, email address, postal address, website or related name."""
+    """One phone number, email address, postal address, website, related name or date."""
 
     value: str
     label: str = ""   # a LABEL_NAMES key, or a custom label as typed; "" for none
     key: str = ""     # normalized form that decides whether two values are the same
     parts: list[str] = field(default_factory=list)  # addresses only: street, city, region, postcode, country
-    odd: bool = False  # the account had an odd label here (see ODD_LABELS)
+    odd: str = ""     # the odd label the account had here, if any (see ODD_LABELS and NEAR_LABELS)
+    pref: bool = False  # iCloud only: marked as the preferred value in its list
 
 
 @dataclass
@@ -64,6 +68,10 @@ class Contact:
     addresses: list[Value] = field(default_factory=list)
     urls: list[Value] = field(default_factory=list)
     related: list[Value] = field(default_factory=list)
+    dates: list[Value] = field(default_factory=list)  # "YYYY-MM-DD", or "--MM-DD" when the year isn't known
+    other_companies: list[list[str]] = field(default_factory=list)  # Google only: [name, title] after the first
+    locations: list[str] = field(default_factory=list)  # Google only
+    company_card: bool = False  # iCloud only: shown as a company rather than a person
     groups: list[str] = field(default_factory=list)
     photo: str = ""      # fingerprint of the photo; "" for none, "?" when it couldn't be read
     updated: str = ""    # when the account last changed the contact, if it says
@@ -85,7 +93,7 @@ class Contact:
 
     @classmethod
     def from_dict(cls, data: dict) -> "Contact":
-        lists = {k: [Value(**v) for v in data.get(k, [])] for k in ("phones", "emails", "addresses", "urls", "related")}
+        lists = {k: [Value(**v) for v in data.get(k, [])] for k in ("phones", "emails", "addresses", "urls", "related", "dates")}
         return cls(**{**data, **lists})
 
 
@@ -127,15 +135,31 @@ def address_key(street: str, city: str, postcode: str, region: str = "") -> str:
     return f"{' '.join(words)}|{place}"
 
 
-def label(raw: str) -> tuple[str, bool]:
-    """A label as stored here, and whether the account had an odd one."""
+def date_key(value: str) -> str:
+    """Dates compare by day and month, so one with the year and one without count as the same date."""
+    return (value or "")[-5:]
+
+
+def without_us_country(parts: list[str]) -> list[str]:
+    """An address's parts without a US country, which adds nothing for a household in the US. An address with
+    nothing else on it keeps it, so it isn't left empty. Other countries stay."""
+    street, city, region, postcode, country = (list(parts) + [""] * 5)[:5]
+    if fold(country) in _US_COUNTRY and (street or city or region or postcode):
+        return [street, city, region, postcode, ""]
+    return list(parts)
+
+
+def label(raw: str) -> tuple[str, str]:
+    """A label as stored here, and the account's own text if it was an odd one."""
     raw = (raw or "").strip()
     if m := _APPLE_LABEL.match(raw):
         raw = m[1]
     if raw.lower() in ODD_LABELS:
-        return "", True
+        return "", raw
     squashed = raw.lower().replace(" ", "")
-    return (squashed if squashed in LABEL_NAMES else raw), False
+    if squashed in NEAR_LABELS:
+        return NEAR_LABELS[squashed], raw
+    return (squashed if squashed in LABEL_NAMES else raw), ""
 
 
 def label_text(value: str) -> str:

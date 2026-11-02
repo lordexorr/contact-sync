@@ -243,9 +243,9 @@ def _backup(raw: dict, work: dict, accounts: _Accounts, tz, person: str) -> Path
         else:
             storage.write_json(folder / f"{name}.json", {"people": data["people"], "groups": data["groups"]})
             group_names = {g["resourceName"]: g["name"] for g in data["groups"]}
-            cards = [vcard.with_backup_details(
+            cards = [vcard.with_companies(
                 vcard.new(str(uuid.uuid4()).upper(), plan.contact_changes(people.read(key, p, group_names)[0])),
-                *people.backup_details(p)) for p in data["people"]]
+                people.backup_companies(p)) for p in data["people"]]
         (folder / f"{name}.vcf").write_bytes("".join(c.rstrip("\r\n") + "\r\n" for c in cards).encode())
     touched = {}  # ref -> the person's name
     for p in work["people"].values():
@@ -379,8 +379,7 @@ class _Writer:
 
     def _update(self, account: str, edit: dict) -> str:
         edit, photo, note = self._photo_for(edit)
-        if note and not (edit["set"] or edit["photo"] or edit["add"] or edit["remove"] or edit["relabel"]
-                         or edit["respell"] or edit.get("carry")):
+        if note and not plan.has_edits(edit):
             raise _NotMade(note)
         cid = edit["ref"].partition("|")[2]
         carry = [r.partition("|")[2] for r in edit.get("carry", [])]
@@ -516,6 +515,14 @@ def describe(edit: dict) -> str:
         parts.append(f"{_count(len(edit['relabel']), 'label')} changed")
     if edit["respell"]:
         parts.append(f"{_count(len(edit['respell']), 'value')} rewritten")
+    if edit["order"]:
+        parts.append(f"{_count(len(edit['order']), 'list')} put in order")
+    if edit["mark_first"] and not edit["order"]:
+        parts.append("preferred value marked")
+    if edit["company_card"] is not None:
+        parts.append("shown as a company" if edit["company_card"] else "no longer shown as a company")
+    if edit["drop_extras"]:
+        parts.append("other companies and locations removed")
     if edit.get("carry"):
         parts.append(f"details of {_count(len(edit['carry']), 'duplicate card')} moved here")
     text = ", ".join(parts) or "updated"

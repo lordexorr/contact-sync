@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.17
+
+More of what's on each card now syncs, so every account can match more closely.
+
+- **Order of lists:** when accounts list a person's phone numbers, emails, addresses, websites, related names or dates in a different order, **Different values** asks which order to use, with nothing chosen for you. Until you choose, every account keeps its own order. Accounts that hold different values but don't disagree on order aren't asked about.
+- **Preferred values:** iCloud's preferred marker, which is always on the first value in a list, now goes on the first value in both iCloud accounts wherever either has one in a list of two or more. Putting a list in order also moves Google's primary marker to its first value.
+- **US country removed:** "US", "USA", "United States" and "United States of America" are removed from any address with something else on it, with no choice to make. Other countries stay. If an account adds one back, the next review shows it and applying removes it again.
+- **Dates:** anniversaries and other dates now sync as a list, with labels and deletions carried across like phone numbers. A date without a year takes the year from one that has it, and two different years are a choice.
+- **Details only Google can hold:** a new review section for other companies and locations, which iCloud has no room for. For each person, choose the main company, which every account will show, and choose **Move to Notes** or **Delete** for every other detail, with nothing chosen for you. Until everything about a person is chosen, those details stay as they are. An exact repeat of the main company goes without asking.
+- **Company cards:** iCloud's setting for showing a card as a company is now kept the same between iCloud accounts. A change in one account since the last apply carries over, including turning it off.
+- **Labels:** "X-Personal" and "Email" now count as leftovers, like "PREF", and start on "other" with a dropdown to pick the real label. "Fax" typed as a label becomes the real fax type.
+- The label rows show the odd label as the account has it, not always "PREF".
+
 ## 0.3.16
 
 Every account can now end up literally the same.
