@@ -24,7 +24,8 @@ log = logging.getLogger(__name__)
 
 RESULT_FILE = PRIVATE_DIR / "last_apply.json"
 BACKUP_DIR = SHARED_DIR / "backups"
-KEEP_BACKUPS = 10
+KEEP_BACKUPS = 10  # of each kind: every account, and one person
+_EVERY_ACCOUNT = re.compile(r"\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}")  # a backup's folder name without a person's
 STOPPED = ("Something changed since the Apply page opened, in an account or in the review, so nothing was "
            "written. Open the review to see what's waiting now.")
 
@@ -127,15 +128,19 @@ def _apply(options: dict, person: str | None, token: str, tz, progress: Progress
         notes.append(f"{failed:,} change{' was' if failed == 1 else 's were'} not made. Those people stay in the "
                      "review, so you can try again.")
     try:
-        _record_result(options, person, before, writer)
+        left = _record_result(options, person, before, writer)
+        if left:
+            notes.append(f"{left:,} contact{' was' if left == 1 else 's were'} deleted from one account and left as "
+                         "they are in the others. To copy one back, tick it under Ignored in the review.")
     except check.ReadError as err:  # the changes are made; only the record of them waits
         log.warning("Couldn't read the result of an apply: %s", err)
         notes.append(f"{err} The review catches up at the next check.")
     result["status"], result["message"] = "done", " ".join(notes)
 
 
-def _record_result(options: dict, person: str | None, before: dict, writer: "_Writer") -> None:
-    """Read what the accounts hold now, and record it for the people the apply covered."""
+def _record_result(options: dict, person: str | None, before: dict, writer: "_Writer") -> int:
+    """Read what the accounts hold now, and record it for the people the apply covered. How many people deleted
+    from one account were left as they are, by an unticked row."""
     if person is None:
         check.read_accounts(options)
     else:
@@ -143,7 +148,7 @@ def _record_result(options: dict, person: str | None, before: dict, writer: "_Wr
         check.merge_records(check.read_some(options, sorted(refs), writer.new_groups), refs)
     loaded = review.current_records(options)
     if not loaded:
-        return
+        return 0
     contacts, accounts_now = loaded
     people_before = before["sync"]["people"]
     # A new copy is the person it was made from, even with too little on it to match by, such as a first
@@ -153,9 +158,16 @@ def _record_result(options: dict, person: str | None, before: dict, writer: "_Wr
         "||".join(sorted((people_before[k]["refs"][0], ref))) for (k, _), ref in writer.created.items()})
     after = plan.build(contacts, accounts_now, decided, base.load())
     keys = [person] if person else [k for k, p in people_before.items() if not p["held"]]
-    covered = {r for k in keys if k in people_before and k not in writer.failed for r in people_before[k]["refs"]}
+    recorded = [k for k in keys if k in people_before and k not in writer.failed]
+    covered = {r for k in recorded for r in people_before[k]["refs"]}
     covered |= {ref for (k, _), ref in writer.created.items() if k not in writer.failed}
+    # Recording these people forgets the deletion, so their row would turn into one copying them back. It stays
+    # unticked, the way every account was left, until it's ticked to do that.
+    left = [f"{k}|new" for k in recorded if people_before[k]["undeleted"]]
+    review.keep_unticked(left)
     base.record(contacts, after["clusters"], covered, accounts_now, person is None, writer.failed_groups)
+    review.tidy_decisions(options)
+    return len(left)
 
 
 def _now() -> str:
@@ -226,12 +238,14 @@ def _backup(raw: dict, work: dict, accounts: _Accounts, tz, person: str) -> Path
         name = _file_name(key)
         if key.startswith("icloud:"):
             storage.write_json(folder / f"{name}.json", data["items"])
-            cards = [item["vcard"] for item in data["items"]]
+            # Contacts only: a group's card, imported, would show up as a contact. The .json keeps the groups.
+            cards = [item["vcard"] for item in data["items"] if not vcard.is_group(item["vcard"])]
         else:
             storage.write_json(folder / f"{name}.json", {"people": data["people"], "groups": data["groups"]})
             group_names = {g["resourceName"]: g["name"] for g in data["groups"]}
-            cards = [vcard.new(str(uuid.uuid4()).upper(), plan.contact_changes(people.read(key, p, group_names)[0]))
-                     for p in data["people"]]
+            cards = [vcard.with_backup_details(
+                vcard.new(str(uuid.uuid4()).upper(), plan.contact_changes(people.read(key, p, group_names)[0])),
+                *people.backup_details(p)) for p in data["people"]]
         (folder / f"{name}.vcf").write_bytes("".join(c.rstrip("\r\n") + "\r\n" for c in cards).encode())
     touched = {}  # ref -> the person's name
     for p in work["people"].values():
@@ -250,8 +264,11 @@ def _backup(raw: dict, work: dict, accounts: _Accounts, tz, person: str) -> Path
                 path = path.with_name(f"{_safe(who)} ({n}).{kind.lower()}")
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(data)
+    # Kept by kind, so one-person backups never push out the last backup of every account.
     backups = sorted(p for p in BACKUP_DIR.iterdir() if p.is_dir())
-    for old in backups[:-KEEP_BACKUPS]:
+    everyone = [p for p in backups if _EVERY_ACCOUNT.fullmatch(p.name)]
+    one_person = [p for p in backups if not _EVERY_ACCOUNT.fullmatch(p.name)]
+    for old in everyone[:-KEEP_BACKUPS] + one_person[:-KEEP_BACKUPS]:
         shutil.rmtree(old, ignore_errors=True)
     return folder
 

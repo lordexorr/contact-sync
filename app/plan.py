@@ -38,16 +38,17 @@ def build(contacts: list[Contact], accounts: list[dict], decisions: dict, base: 
     other account are ignored, so an account that couldn't be read never looks empty. decisions holds the
     user's "same"/"different" pairs, "picks", "skips" and "keeps": a skipped row leaves every account as it
     is, a skipped list value ("<person>|<field>=<value>") is left out of every account, and a kept one stays
-    in every account even when an account deleted it. base is what the accounts held after the last apply
-    (see base.py).
+    in every account even when an account deleted it. "pick_seen" and "skip_seen" fingerprint what a pick or
+    an unticked row was about, so it stops counting once that changes. base is what the accounts held after
+    the last apply (see base.py).
 
     review["sync"] holds the edits: for each person, the copies to delete, create and update, and the group
     changes, one per account and group. Skipped rows make none.
     """
-    names = {a["key"]: a["name"] for a in accounts}
+    names = _column_names(accounts)
     contacts = [c for c in contacts if c.account in names]
     by_ref = {c.ref: c for c in contacts}
-    picks, skips, keeps = decisions.get("picks", {}), set(decisions.get("skips", [])), set(decisions.get("keeps", []))
+    picks, skips, keeps = _Picks(decisions), _Skips(decisions), set(decisions.get("keeps", []))
     duplicates = decisions.get("duplicates", {})  # "<person>|dup:<account>" -> "merge" or "keep"
     last = _Last(base or {}, set(by_ref))
     same, different = set(decisions.get("same", [])), set(decisions.get("different", []))
@@ -68,7 +69,8 @@ def build(contacts: list[Contact], accounts: list[dict], decisions: dict, base: 
               "duplicates": [], "clusters": clusters, "sync": {"names": names, "people": {}, "groups": []},
               "warnings": [f"{gone[a]:,} contacts have gone from {names[a]} since the last sync, more than usual. "
                            "Deleting them from the other accounts waits until you tick each one, so check that "
-                           "account first." for a in sorted(mass)]}
+                           "account first. Applying without ticking them leaves every account as it is, and "
+                           "they move to Ignored, where ticking one copies it back." for a in sorted(mass)]}
     for pair, reason in suggestions:
         review["suggestions"].append({
             "id": pair, "reason": reason, "contacts": [_summary(by_ref[r], names) for r in pair.split("||")],
@@ -88,7 +90,7 @@ def build(contacts: list[Contact], accounts: list[dict], decisions: dict, base: 
         # sort ahead of it, so a person keeps the key their decisions already use.
         key = next((r for r in refs if r in keyed), refs[0])
         merged, conflicts = _merge(key, copies, picks, names, last)
-        review["conflicts"] += [{**c, "person": merged["display"], "decided": c["id"] in picks} for c in conflicts]
+        review["conflicts"] += [{**c, "person": merged["display"]} for c in conflicts]
         person = _Person(key, copies, merged, names, skips, keeps, last)
         person.compare(duplicates, mass)
         person.ops["held"] = refs[0] in waiting
@@ -186,6 +188,44 @@ def show(field: str, value: str) -> str:
     return value
 
 
+def _column_names(accounts: list[dict]) -> dict[str, str]:
+    """Each account's name in the review, by account key. The review's columns go by name, so two accounts with
+    the same one, such as two iCloud accounts left without a label, each get their login added."""
+    counts = Counter(a["name"] for a in accounts)
+    return {a["key"]: a["name"] if counts[a["name"]] == 1 else f"{a['name']} ({a['key'].partition(':')[2]})"
+            for a in accounts}
+
+
+def _fingerprint(basis) -> str:
+    return hashlib.sha256(json.dumps(basis, sort_keys=True).encode()).hexdigest()[:16]
+
+
+class _Picks:
+    """Values and labels picked in the review. A pick counts only while what it was picked between is what's
+    there now, so a value that changes afterwards is asked about instead of being overwritten. A pick from
+    before this was kept has no fingerprint yet, and counts until the next check gives it one."""
+
+    def __init__(self, decisions: dict):
+        self._picks, self._seen = decisions.get("picks", {}), decisions.get("pick_seen", {})
+
+    def get(self, pick_id: str, values) -> str | None:
+        seen = self._seen.get(pick_id)
+        return self._picks.get(pick_id) if seen in (None, _fingerprint(sorted(values))) else None
+
+
+class _Skips(set):
+    """Unticked rows and list values. A row stays unticked only while what it compares is unchanged, so a later
+    change, such as a new number under the same label, isn't hidden. A row with nothing to go on (seen "") stays
+    unticked for as long as it's there, and so does one from before this was kept, until the next check."""
+
+    def __init__(self, decisions: dict):
+        super().__init__(decisions.get("skips", []))
+        self._seen = decisions.get("skip_seen", {})
+
+    def holds(self, row_id: str, seen: str) -> bool:
+        return row_id in self and (not seen or self._seen.get(row_id) in (None, seen))
+
+
 def _decision_keys(decisions: dict) -> set[str]:
     """The person keys that unticks, picks and duplicate choices are filed under ("<account>|<id>")."""
     ids = [*decisions.get("skips", []), *decisions.get("keeps", []), *decisions.get("picks", {}),
@@ -241,12 +281,12 @@ class _Last:
     def changed(self, c: Contact, field: str, key: str) -> bool:
         """Whether c's value, compared as key, differs from what c held at the last apply."""
         entry = self._contacts.get(c.ref)
-        return entry is not None and _compare_key(field, entry["fields"].get(field, "")) != key
+        return entry is not None and not _matches(field, entry["fields"].get(field, ""), key)
 
     def had(self, c: Contact, field: str, key: str) -> bool:
         """Whether c held this value at the last apply."""
         old = self._contacts.get(c.ref, {}).get("fields", {}).get(field, "")
-        return bool(old) and _compare_key(field, old) == key
+        return bool(old) and _matches(field, old, key)
 
     def photo_changed(self, c: Contact, fp: str) -> bool:
         entry = self._contacts.get(c.ref)
@@ -285,12 +325,12 @@ def _merge(key: str, members: list[Contact], picks: dict, names: dict, last: _La
             if value:
                 option = options.setdefault(_compare_key(field, value), {"value": value, "contacts": []})
                 option["contacts"].append(c)
-                if field == "birthday" and value[0].isdigit():
-                    option["value"] = value  # the version with the year wins
+        if field == "birthday":
+            _settle_years(options)
         changed = {k for k, o in options.items() if any(last.changed(c, field, k) for c in o["contacts"])}
         chosen = _choose(f"{key}|{field}", options, picks, changed)
         if len(options) > 1:
-            conflicts.append(_conflict(f"{key}|{field}", title, options, chosen, names,
+            conflicts.append(_conflict(f"{key}|{field}", title, options, chosen, names, picks,
                                        lambda o: {"value": show(field, o["value"])}))
         merged[field] = options[chosen]["value"] if chosen else ""
         if field == "name":
@@ -301,10 +341,13 @@ def _merge(key: str, members: list[Contact], picks: dict, names: dict, last: _La
             emptied = [c.account for c in members if not getattr(c, field) and last.had(c, field, chosen)]
             if emptied:
                 cleared[field], merged[field] = emptied, ""
+    merged["labels_held"] = {}  # "<field>~<value>" -> every label the accounts give it, which a pick is made between
     for field in MULTI:
         merged[field] = _union(members, field, last)
         for v in merged[field]:  # a label picked on the review page wins
-            v.label = picks.get(f"{key}|{field}~{v.key}", v.label)
+            held = sorted({x.label.lower() for c in members for x in getattr(c, field) if (x.key or fold(x.value)) == v.key})
+            merged["labels_held"][f"{field}~{v.key}"] = held
+            v.label = picks.get(f"{key}|{field}~{v.key}", held) or v.label
     merged["groups"] = sorted({fold(g): g for c in members for g in c.groups}.values(), key=fold)
     merged["photo"], merged["photo_from"] = _merge_photo(key, members, picks, names, conflicts, last, cleared)
     merged["cleared"] = cleared
@@ -314,30 +357,54 @@ def _merge(key: str, members: list[Contact], picks: dict, names: dict, last: _La
 
 
 def _compare_key(field: str, value: str) -> str:
-    # Birthdays compare by day and month, so one with the year and one without count as the same.
-    return value[-5:] if field == "birthday" else fold(value)
+    return value if field == "birthday" else fold(value)
+
+
+def _matches(field: str, value: str, key: str) -> bool:
+    """Whether a value is the one an option's key stands for."""
+    return _same_birthday(value, key) if field == "birthday" else fold(value) == key
+
+
+def _same_birthday(a: str, b: str) -> bool:
+    """Whether two birthdays agree: the same day, and the same year unless one has none."""
+    if not a or not b:
+        return a == b
+    return a[-5:] == b[-5:] and (a[:4] == b[:4] or not a[0].isdigit() or not b[0].isdigit())
+
+
+def _settle_years(options: dict) -> None:
+    """A birthday without a year counts as the same as one with it, so the version with the year wins. With two
+    years for that day there's a choice to make between those, and the one without a year has no say in it."""
+    for key in [k for k in options if not k[0].isdigit()]:
+        dated = [k for k in options if k[0].isdigit() and k[-5:] == key[-5:]]
+        if dated:
+            yearless = options.pop(key)
+            if len(dated) == 1:
+                options[dated[0]]["contacts"] += yearless["contacts"]
 
 
 def _newest(contacts: list[Contact]) -> Contact:
     return max(contacts, key=lambda c: c.updated or "")
 
 
-def _choose(conflict_id: str, options: dict, picks: dict, changed: set) -> str | None:
+def _choose(conflict_id: str, options: dict, picks: _Picks, changed: set) -> str | None:
     """The user's pick if they made one. Otherwise, of the values changed since the last apply (or of all of
     them when none was), the one from the most recently changed contact."""
     if not options:
         return None
-    if picks.get(conflict_id) in options:
-        return picks[conflict_id]
+    picked = picks.get(conflict_id, options)
+    if picked in options:
+        return picked
     pool = [k for k in options if k in changed] or list(options)
     return max(pool, key=lambda k: _newest(options[k]["contacts"]).updated or "")
 
 
-def _conflict(conflict_id: str, title: str, options: dict, chosen: str, names: dict, describe) -> dict:
-    return {"id": conflict_id, "field": title, "chosen": chosen, "options": [
-        {"key": k, **describe(o), "accounts": sorted({names[c.account] for c in o["contacts"]})}
-        for k, o in options.items()
-    ]}
+def _conflict(conflict_id: str, title: str, options: dict, chosen: str, names: dict, picks: _Picks, describe) -> dict:
+    return {"id": conflict_id, "field": title, "chosen": chosen, "seen": _fingerprint(sorted(options)),
+            "decided": picks.get(conflict_id, options) in options, "options": [
+                {"key": k, **describe(o), "accounts": sorted({names[c.account] for c in o["contacts"]})}
+                for k, o in options.items()
+            ]}
 
 
 def _union(members: list[Contact], field: str, last: _Last) -> list[Value]:
@@ -380,7 +447,7 @@ def _merge_photo(key, members, picks, names, conflicts, last, cleared) -> tuple[
     changed = {k for k, o in options.items() if any(last.photo_changed(c, k) for c in o["contacts"])}
     chosen = _choose(f"{key}|photo", options, picks, changed)
     if len(options) > 1:
-        conflicts.append(_conflict(f"{key}|photo", "Photo", options, chosen, names, lambda o: {"thumb": o["value"]}))
+        conflicts.append(_conflict(f"{key}|photo", "Photo", options, chosen, names, picks, lambda o: {"thumb": o["value"]}))
     if not chosen:
         return "", ""
     if len(options) == 1 and chosen not in changed:
@@ -395,9 +462,12 @@ def _merge_photo(key, members, picks, names, conflicts, last, cleared) -> tuple[
 # Each row compares what every account has now ("cells") with what all of them will have after the sync
 # ("after"). "changing" names the accounts the row would change.
 
-def _row(row_id: str, title: str, cells: dict, changing: list[str], names: dict, after: dict, skips: set) -> dict:
+def _row(row_id: str, title: str, cells: dict, changing: list[str], names: dict, after: dict, skips: _Skips,
+         basis=None) -> dict:
+    """A row. basis is what the row compares, so unticking it lasts only until that changes."""
+    seen = "" if basis is None else _fingerprint(basis)
     return {"id": row_id, "title": title, "cells": cells, "changing": [names[a] for a in changing], "after": after,
-            "skipped": row_id in skips}
+            "seen": seen, "skipped": skips.holds(row_id, seen)}
 
 
 def _now(old: str, new: str, changing: bool) -> list[dict]:
@@ -413,7 +483,7 @@ class _Person:
     account has the person more than once, the copy with the most details is the one compared and updated,
     and the one kept if the copies are merged."""
 
-    def __init__(self, key: str, copies: list[Contact], merged: dict, names: dict, skips: set, keeps: set,
+    def __init__(self, key: str, copies: list[Contact], merged: dict, names: dict, skips: _Skips, keeps: set,
                  last: _Last):
         self.key, self.merged, self.names = key, merged, names
         self.skips, self.keeps, self.last = skips, keeps, last
@@ -429,7 +499,8 @@ class _Person:
         self.rows: list[dict] = []
         self.edits: dict[str, dict] = defaultdict(_blank)
         # "drop" holds extra copies that merging deletes, once everything on them is on the copy kept.
-        self.ops = {"name": merged["display"], "refs": [c.ref for c in copies], "held": False,
+        # "undeleted": an account deleted the person, and the row deleting them from the others is unticked.
+        self.ops = {"name": merged["display"], "refs": [c.ref for c in copies], "held": False, "undeleted": False,
                     "update": {}, "create": None, "delete": [], "drop": []}
 
     def compare(self, duplicates: dict, mass: set[str]) -> None:
@@ -440,6 +511,7 @@ class _Person:
             if not self._delete_row(gone, bool(set(gone) & mass))["skipped"]:
                 self.ops["delete"] = list(self.ops["refs"])
                 return  # nothing else about a person matters once they're being deleted
+            self.ops["undeleted"] = True
         elif self.missing and not self._contact_row()["skipped"]:
             self.ops["create"] = {"accounts": self.missing, "contact": self._new_contact()}
         for a in self.extras:
@@ -474,9 +546,9 @@ class _Person:
         return {"person": self.key, "ref": c.ref if c else "", "name": self.merged["display"]}
 
     def _row(self, row_id: str, title: str, cells: dict, changing: list[str], after: dict,
-             unticked: bool = False) -> dict:
+             unticked: bool = False, basis=None) -> dict:
         """A row, ticked unless skipped. One that starts unticked stays so until it's ticked."""
-        row = _row(row_id, title, cells, changing, self.names, after, self.skips)
+        row = _row(row_id, title, cells, changing, self.names, after, self.skips, basis)
         row["skipped"] = row["skipped"] or (unticked and row_id not in self.keeps)
         self.rows.append(row)
         return row
@@ -541,7 +613,8 @@ class _Person:
                 value = self.merged["name_parts"] if field == "name" else new
             else:
                 continue
-            if changing and not self._row(f"{self.key}|field:{field}", title, cells, changing, after)["skipped"]:
+            basis = sorted([a, fold(old)] for a, old in have.items())
+            if changing and not self._row(f"{self.key}|field:{field}", title, cells, changing, after, basis=basis)["skipped"]:
                 for a in changing:
                     self.edits[a]["set"][field] = value
 
@@ -567,7 +640,8 @@ class _Person:
             after, edit = {"kind": "photo", "thumb": photo}, {"from": self.merged["photo_from"]}
         else:
             return
-        if changing and not self._row(f"{self.key}|field:photo", "Photo", cells, changing, after)["skipped"]:
+        basis = sorted([a, c.photo] for a, c in self.first.items())
+        if changing and not self._row(f"{self.key}|field:photo", "Photo", cells, changing, after, basis=basis)["skipped"]:
             for a in changing:
                 self.edits[a]["photo"] = edit
 
@@ -584,9 +658,10 @@ class _Person:
                 options = list(dict.fromkeys(LABEL_CHOICES[field] + sorted(seen, key=str.lower) + [v.label]))
                 cells = {self.names[a]: _now("PREF" if m.odd else label_text(m.label), label_text(v.label), a in changing)
                          for a, m in holders.items()}
+                labels_held = self.merged["labels_held"][f"{field}~{v.key}"]
                 after = {"kind": "label", "id": row_id, "options": [(o, label_text(o)) for o in options],
-                         "chosen": v.label}
-                row = self._row(row_id, f"Label of {v.value}", cells, changing, after)
+                         "chosen": v.label, "seen": _fingerprint(labels_held)}
+                row = self._row(row_id, f"Label of {v.value}", cells, changing, after, basis=labels_held)
                 if not row["skipped"] and self._kept(field, v):
                     for a in changing:
                         self.edits[a]["relabel"].append({"field": field, "key": v.key, "label": v.label})
@@ -610,7 +685,8 @@ class _Person:
             items = [{"id": f"{self.key}|{field}={v.key}", "text": v.value, "kept": v.key in kept,
                       "note": self._deleted_note(field, v.key)} for v in values]
             row = self._row(f"{self.key}|{field}:{label.lower()}", title[0].upper() + title[1:], cells, changing,
-                            {"kind": "values", "items": items})
+                            {"kind": "values", "items": items},
+                            basis=[sorted(keys), sorted([a, sorted(set(h) & keys)] for a, h in held.items())])
             if row["skipped"]:
                 continue
             for a in changing:
@@ -670,7 +746,12 @@ def _group_rows(names, have, dropped, spelling, members, to_group, from_group, t
                 [f"Adds to {names[a]}: {_names(to_group[(a, g)])}" for a in names if to_group.get((a, g))]
                 + [f"Removes from {names[a]}: {_names(from_group[(a, g)])}" for a in names if from_group.get((a, g))])
             after = {"kind": "text", "value": f"In every account, {_count(totals[g], 'member')}", "details": details}
-        row = _row(f"group|{g}", title, cells, changing, names, after, skips)
+        # Unticked for an account that lacks the group, new members don't bring it back; for a group every
+        # account has, the people joining or leaving do.
+        lacking = sorted(a for a in names if g not in have[a])
+        moving = sorted({m["person"] for a in names for m in to_group.get((a, g), []) + from_group.get((a, g), [])})
+        row = _row(f"group|{g}", title, cells, changing, names, after, skips,
+                   basis=[g in dropped, lacking, [] if lacking else moving])
         rows.append(row)
         if not row["skipped"]:
             ops += [{"account": a, "group": title, "fold": g, "create": g not in have[a], "delete": g in dropped,
@@ -687,7 +768,8 @@ def _listed_rows(names, unlisted, skips):
         cells[names[a]] = [{"text": f"{_count(len(people), 'contact')} only in labels, not in My Contacts"}]
         after = {"kind": "text", "value": "In My Contacts, so Google Contacts lists them",
                  "details": f"Adds to My Contacts in {names[a]}: {_names(people)}"}
-        row = _row(f"listed|{a}", "My Contacts (Google)", cells, [a], names, after, skips)
+        row = _row(f"listed|{a}", "My Contacts (Google)", cells, [a], names, after, skips,
+                   basis=sorted(m["person"] for m in people))
         rows.append(row)
         if not row["skipped"]:
             ops.append({"account": a, "group": "My Contacts", "fold": "", "create": False, "delete": False,

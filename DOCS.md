@@ -54,18 +54,18 @@ Then press **Check now**. Each account should show its contact count.
 
 After each check, the **Review** section just below **Check now** counts what a sync would change. **Open the review** shows the details. It's there even when nothing is waiting, with a count of what you've ignored and decided, so you can always go back and change those.
 
-- **Possible matches:** two contacts that might be the same person: the same name twice in one account, the same name with different phone numbers, emails or birthdays, or the same phone number or email address under different names. Each side shows everything that copy holds. Choose **Same person** or **Different people**, and the card moves to a collapsed **Decided** section, where you can change the answer.
-- **Different values:** a name, nickname, company, job title, birthday, note or photo that differs between accounts. Pick the value every account should have, and it moves to a collapsed **Decided** section. Until you pick, a value one account changed since the last sync is used over one left as it was; otherwise the value from the most recently changed contact. The one used is marked.
+- **Possible matches:** two contacts that might be the same person: the same name twice in one account, the same name with different phone numbers, emails or birthdays, the same phone number or email address under different names or with different birthdays, or a card with little on it that could be either of two same-named people. Each side shows everything that copy holds. Choose **Same person** or **Different people**, and the card moves to a collapsed **Decided** section, where you can change the answer. **Different people** holds even if the two later share a phone number.
+- **Different values:** a name, nickname, company, job title, birthday, note or photo that differs between accounts. Two birthdays on the same day with different years count; one without a year just takes the year. Pick the value every account should have, and it moves to a collapsed **Decided** section. Until you pick, a value one account changed since the last sync is used over one left as it was; otherwise the value from the most recently changed contact. The one used is marked. A pick lasts until the accounts agree. If a value changes after you picked, it's asked about again.
 - **Changes:** a table for each person that differs between accounts. Each account has a column showing what it has now, and the **After sync** column shows what every account will have once you apply. Only details that differ get a row: a person missing from an account; a name, nickname, company, job title, birthday, note or photo; each kind of phone number, email, address, website or related name (for example "Work address"); and labels that differ, including odd ones like "PREF", with a dropdown to pick the label. The dropdown's last choice, **Custom…**, opens a box to type any label, such as "Facebook" or "Personal"; iCloud and Google both keep it as typed. Struck-through values would be replaced or removed, values marked + would be added, and the green **After sync** column is what every account ends up with.
-  - Untick a row to leave every account as it is for that row. It moves to a collapsed **Ignored** section at the bottom, where ticking it again brings it back.
+  - Untick a row to leave every account as it is for that row. It moves to a collapsed **Ignored** section at the bottom, where ticking it again brings it back. If what the row compares changes later, such as a new number under the same label, it comes back ticked. A **Contact** row and a group that an account lacks stay unticked until you tick them.
   - In a list, such as two different work addresses, untick a value in **After sync** to leave it out of every account; it's removed from any account that has it.
   - Groups get a table of their own, with each account's member count. Google labels count as groups.
   - **My Contacts (Google):** Google Contacts lists, and counts, only the contacts in its *My Contacts* group. A contact can end up only in a label instead, which some other sync tools do: it's in the account and Contact Sync reads it, but Google Contacts leaves it out of its main list and its count. That's why Google can show fewer contacts than Contact Sync. This row lists any such contacts in each Google account, and applying adds them to My Contacts.
   - A person waiting on a possible match has a note under their table instead of an **Apply just** button.
 - **Duplicates within one account:** the same person more than once in one account, with every card shown side by side. **Merge into one** keeps the card with the most details, moves everything from the other cards onto it (including details Contact Sync doesn't otherwise use, such as dates, social profiles and messaging handles), and deletes the others when you apply. The person's table then has a **Duplicate cards** row, which you can untick. **Keep both** leaves them as they are. Either choice moves the card to a collapsed **Decided** section, where you can switch. Until you choose, applying leaves the extra cards alone. A same-name pair in one account first appears under **Possible matches**; answering **Same person** brings it here.
-- **Start over** forgets every match, choice and skip.
+- **Start over** forgets every match, choice and skip, once you confirm it.
 
-Contacts are matched automatically when they share a phone number or email address and their names agree, or when they have the same name in different accounts and nothing contradicts it. A first or last name on its own counts, and a card with no name goes by its company, so a business entered as a first name in one account and as the company in another still matches. Contacts that were one person at the last apply stay matched, even after a name or number changes in one account. Being matched only means the copies are the same person: every difference between them still appears under **Changes**. Everything you choose is saved the moment you click it, and kept for later checks.
+Contacts are matched automatically when they share a phone number or email address, their names agree and their birthdays don't differ, or when they have the same name in different accounts and nothing contradicts it. A first or last name on its own counts, and a card with no name goes by its company, so a business entered as a first name in one account and as the company in another still matches. Contacts that were one person at the last apply stay matched, even after a name or number changes in one account. Being matched only means the copies are the same person: every difference between them still appears under **Changes**. Everything you choose is saved the moment you click it, and kept for later checks until the accounts no longer differ on it, when it's forgotten so it can't undo a later edit.
 
 ## Applying changes
 
@@ -83,28 +83,29 @@ The results page lists every change made and every one that wasn't, with the rea
 - People in an unanswered possible match are left out until you answer it, so a sync can't create a second copy of someone.
 - A duplicate card being merged is deleted only after everything on it has been added to the card kept. If that fails, it's left as it is.
 - A value between accounts that you haven't picked uses the one marked in the review.
+- An account that couldn't be read at the latest check is left out, and the Contact Sync page, the review and the Apply page say so. Applying changes only the other accounts. Once the account can be read again it catches up, including deleting from it anything deleted meanwhile.
 
 ### Deletions
 
 The record made after each apply is what lets later reviews tell a deletion from a detail that was never synced. When something an account held at the last apply is gone from it, the review proposes deleting it from the other accounts too, instead of copying it back:
 
-- A deleted contact shows as a **Contact** row that deletes it from every account. Untick it to leave every account as it is.
+- A deleted contact shows as a **Contact** row that deletes it from every account. Untick it to leave every account as it is. After you next apply, it stays under **Ignored**, where ticking it copies the contact back instead.
 - A deleted phone number, email, address, website or related name starts unticked in **After sync**, with a note saying where it was deleted. Tick it to keep it in every account instead.
 - A cleared nickname, company, job title, birthday, note or photo shows as removed from every account. A name is never removed.
 - A group deleted from one account, or a person taken out of a group, is deleted from or taken out of the group in the other accounts.
 
 Until the first apply, nothing counts as deleted.
 
-When more than 10 contacts have gone from one account since the last apply, that looks more like a glitch or a mistake than tidying up. The review shows a warning, and deleting those contacts from the other accounts starts unticked, so nothing goes until you tick each one.
+When more than 10 contacts have gone from one account since the last apply, that looks more like a glitch or a mistake than tidying up. The review shows a warning, and deleting those contacts from the other accounts starts unticked, so nothing goes until you tick each one. Applying without ticking them leaves them as they are, the same as unticking a **Contact** row above, and the results page says how many.
 
 ### Backups
 
-Before writing, Contact Sync saves a backup to `addon_configs/local_contact_sync/backups`. The last 10 backups are kept. Each is a folder named for the date and time it was made, such as `2026-11-01_14-05-12`. Applying everyone backs up every account. Applying one person backs up only their cards, and the folder name ends with theirs, such as `2026-11-01_14-05-12 Jane Smith`.
+Before writing, Contact Sync saves a backup to `addon_configs/local_contact_sync/backups`. Each is a folder named for the date and time it was made, such as `2026-11-01_14-05-12`. Applying everyone backs up every account. Applying one person backs up only their cards, and the folder name ends with theirs, such as `2026-11-01_14-05-12 Jane Smith`. The last 10 of each kind are kept, so one-person backups never push out a backup of every account.
 
 Each folder holds:
 
 - `What changed.txt`, listing every change that apply made and every one it didn't, by contact and account. It's the way to find the backup from just before a change you want to undo.
-- For each account, a `.vcf` file, which iCloud.com, Google Contacts and the Contacts apps can import, and a `.json` file with everything as the service sent it.
+- For each account, a `.vcf` file of its contacts, which iCloud.com, Google Contacts and the Contacts apps can import, and a `.json` file with everything as the service sent it, including its groups.
 - Under `photos`, the full-size photo of every contact the apply changed or deleted, named after the person.
 
 Importing a `.vcf` file adds its contacts as new ones, next to any already there.

@@ -27,9 +27,18 @@ def current_records(options: dict) -> tuple[list[Contact], list[dict]] | None:
 
 
 def current_plan(options: dict) -> dict | None:
-    """The review from the latest check; None before the first check."""
+    """The review from the latest check; None before the first check. review["unread"] names any account the
+    check couldn't read, which the review and the Apply page say are left out."""
     loaded = current_records(options)
-    return plan.build(*loaded, decisions(), base.load()) if loaded else None
+    if not loaded:
+        return None
+    review = plan.build(*loaded, decisions(), base.load())
+    failed = [a for a in (check.load_status() or {}).get("accounts", []) if a["error"]]
+    review["unread"] = [f"{a['service']} {a['name']}" for a in failed]
+    review["warnings"] += [f"{a['service']} {a['name']} couldn't be read at the latest check ({a['error']}), so it's "
+                           "left out. Applying changes only the other accounts, and it catches up once it can be "
+                           "read." for a in failed]
+    return review
 
 
 def decisions() -> dict:
@@ -66,13 +75,20 @@ def decide_duplicate(dup_id: str, decision: str) -> None:
         _update(lambda d: d.setdefault("duplicates", {}).update({dup_id: decision}))
 
 
-def pick(choice_id: str, choice: str) -> None:
-    """A value picked for a field that differs between accounts, or a label picked for one value."""
-    if choice_id and choice:
-        _update(lambda d: d.setdefault("picks", {}).update({choice_id: choice}))
+def pick(choice_id: str, choice: str, seen: str = "") -> None:
+    """A value picked for a field that differs between accounts, or a label picked for one value. seen
+    fingerprints what it was picked between (see plan._Picks)."""
+    if not (choice_id and choice):
+        return
+
+    def change(d):
+        d.setdefault("picks", {})[choice_id] = choice
+        _note_seen(d.setdefault("pick_seen", {}), choice_id, seen)
+    _update(change)
 
 
-def set_skip(change_id: str, keep: bool) -> None:
+def set_skip(change_id: str, keep: bool, seen: str = "") -> None:
+    """Tick or untick a row or a list value. seen fingerprints what an unticked row compares (see plan._Skips)."""
     if not change_id:
         return
 
@@ -82,11 +98,53 @@ def set_skip(change_id: str, keep: bool) -> None:
         (skips.discard if keep else skips.add)(change_id)
         (keeps.add if keep else keeps.discard)(change_id)
         d["skips"], d["keeps"] = sorted(skips), sorted(keeps)
+        _note_seen(d.setdefault("skip_seen", {}), change_id, "" if keep else seen)
     _update(change)
+
+
+def keep_unticked(row_ids: list[str]) -> None:
+    """Leave these rows unticked from now on."""
+    if row_ids:
+        _update(lambda d: d.update(skips=sorted(set(d.get("skips", [])) | set(row_ids))))
 
 
 def reset() -> None:
     _update(lambda d: d.clear())
+
+
+def tidy_decisions(options: dict) -> None:
+    """After a check or an apply, forget choices about anything the accounts no longer differ on, so an answer
+    given once can't undo a later edit. Nothing is forgotten while an account can't be read, because what it
+    holds may be the only difference."""
+    review = current_plan(options)
+    if review and not review["unread"]:
+        _update(lambda d: tidy(d, review))
+
+
+def tidy(d: dict, review: dict) -> None:
+    """decided (d) without the choices review no longer has a place for. A choice from before fingerprints were
+    kept gets the fingerprint of what's there now."""
+    rows = [r for p in review["people"] for r in p["rows"]] + review["groups"]
+    row_seen = {r["id"]: r["seen"] for r in rows}
+    values = {i["id"] for r in rows if r["after"]["kind"] == "values" for i in r["after"]["items"]}
+    pick_seen = ({c["id"]: c["seen"] for c in review["conflicts"]}
+                 | {r["id"]: r["after"]["seen"] for r in rows if r["after"]["kind"] == "label"})
+    duplicates = {x["id"] for x in review["duplicates"]}
+    d["skips"] = [i for i in d.get("skips", []) if i in row_seen or i in values]
+    d["keeps"] = [i for i in d.get("keeps", []) if i in row_seen or i in values]
+    skip_seen = d.get("skip_seen", {})
+    d["skip_seen"] = {i: skip_seen.get(i, row_seen[i]) for i in d["skips"] if row_seen.get(i)}
+    d["picks"] = {i: v for i, v in d.get("picks", {}).items() if i in pick_seen}
+    old_seen = d.get("pick_seen", {})
+    d["pick_seen"] = {i: old_seen.get(i, pick_seen[i]) for i in d["picks"]}
+    d["duplicates"] = {i: v for i, v in d.get("duplicates", {}).items() if i in duplicates}
+
+
+def _note_seen(seen_by_id: dict, choice_id: str, seen: str) -> None:
+    if seen:
+        seen_by_id[choice_id] = seen
+    else:
+        seen_by_id.pop(choice_id, None)
 
 
 def _update(change) -> None:
@@ -112,7 +170,8 @@ def summary_card(review: dict | None, last_apply: str = "") -> str:
                    + sum(bool(d["choice"]) for d in review["duplicates"]))
         kept = " and ".join(filter(None, (f"{ignored:,} ignored" if ignored else "",
                                           f"{decided:,} decided" if decided else "")))
-        body = ("<p class='ok'>Every account matches. There's nothing to sync.</p>"
+        matches = "Every account that could be read matches." if review.get("unread") else "Every account matches."
+        body = (f"<p class='ok'>{matches} There's nothing to sync.</p>"
                 + (f"<p class='muted'>{kept}, under Open the review.</p>" if kept else ""))
     return (head + body + "<div class='row'><a class='button' href='review'>Open the review</a></div>"
             + last_apply + "</section>")
@@ -140,8 +199,11 @@ def page_body(review: dict | None) -> str:
         parts.append("<div class='row'><a class='button' href='apply'>Apply changes…</a></div>")
     parts.append(
         "<section class='card'><h2>Start over</h2><p class='muted'>Forget every match, choice and skip "
-        "made on this page.</p><form method='post' action='review/reset'>"
-        "<button class='secondary'>Forget my decisions</button></form></section>"
+        "made on this page.</p><details class='fold'><summary>Forget my decisions…</summary>"
+        "<p>Every row you unticked comes back ticked, every possible match is asked again, and every value "
+        "you picked goes back to the one marked. Nothing is written to any account until you apply.</p>"
+        "<form method='post' action='review/reset'><button class='secondary'>Yes, forget my decisions</button>"
+        "</form></details></section>"
     )
     parts.append(f"<div id='toast' class='toast' hidden></div><script>{_SCRIPT}</script>")
     return "".join(parts)
@@ -208,7 +270,8 @@ def _conflicts(items: list[dict]) -> str:
                      else f"<span>{esc(o['value'])}</span>")
             options.append(
                 f"<label class='option'><input type='radio' class='pick' autocomplete='off' name='choice-{i}' "
-                f"data-conflict='{esc(c['id'])}' value='{esc(o['key'])}'{' checked' if picked else ''}>"
+                f"data-conflict='{esc(c['id'])}' data-seen='{esc(c['seen'])}' value='{esc(o['key'])}'"
+                f"{' checked' if picked else ''}>"
                 f"{shown}<span class='muted'>{esc(', '.join(o['accounts']))}</span>{default}</label>"
             )
         return f"<div class='item'><b>{esc(c['person'])}</b> · {esc(c['field'])}{''.join(options)}</div>"
@@ -270,8 +333,8 @@ def _table(title: str, columns: list[str], rows: list[dict], footer: str = "") -
 def _row(row: dict, columns: list[str]) -> str:
     # autocomplete=off on every control: otherwise Firefox restores ticks by position after the reload, and a
     # row that moved to Ignored hands its unticked look to the row that took its place.
-    box = (f"<label><input type='checkbox' class='skip' autocomplete='off' data-id='{esc(row['id'])}'"
-           f"{'' if row['skipped'] else ' checked'}> {esc(row['title'])}</label>")
+    box = (f"<label><input type='checkbox' class='skip' autocomplete='off' data-id='{esc(row['id'])}' "
+           f"data-seen='{esc(row['seen'])}'{'' if row['skipped'] else ' checked'}> {esc(row['title'])}</label>")
     cells = "".join(f"<td>{_cell(row['cells'].get(c, []))}</td>" for c in columns)
     return f"<tr><th>{box}</th>{cells}<td class='after'>{_after(row['after'])}</td></tr>"
 
@@ -316,9 +379,10 @@ def _after(after: dict) -> str:
         # Custom… opens a box for typing any label; iCloud and Google both keep custom labels as typed.
         options = "".join(f"<option value='{esc(v)}'{' selected' if v == after['chosen'] else ''}>{esc(text)}</option>"
                           for v, text in after["options"]) + f"<option value='{CUSTOM}'>Custom…</option>"
-        return (f"<select class='label' autocomplete='off' data-id='{esc(after['id'])}'>{options}</select>"
+        seen = esc(after["seen"])
+        return (f"<select class='label' autocomplete='off' data-id='{esc(after['id'])}' data-seen='{seen}'>{options}</select>"
                 "<span class='custom' hidden><input type='text' autocomplete='off' maxlength='40' placeholder='Label'>"
-                f"<button type='button' class='custom-save' data-id='{esc(after['id'])}'>Save</button></span>")
+                f"<button type='button' class='custom-save' data-id='{esc(after['id'])}' data-seen='{seen}'>Save</button></span>")
     details = (f"<details><summary class='muted'>Details</summary>{esc(after['details'])}</details>"
                if after.get("details") else "")
     return f"<div>{esc(after['value'])}</div>{details}"
@@ -433,7 +497,7 @@ def _steps(one_person: bool) -> str:
     return (
         f"<p>When you press <b>Apply now</b>, Contact Sync:</p><ol><li>{read}</li>"
         f"<li>{backup} in <code>addon_configs/local_contact_sync/backups</code>, with a <code>What changed.txt</code> "
-        "file listing every change. The last 10 backups are kept.</li>"
+        "file listing every change. The last 10 backups of this kind are kept.</li>"
         "<li>Makes these changes. Only the details shown in the review are touched; everything else on each contact "
         "stays as it is.</li>"
         f"<li>{record}, so later reviews can tell a deletion from a detail that was never synced.</li></ol>"
@@ -508,13 +572,13 @@ async function save(url, data) {
 }
 document.addEventListener('change', e => {
   const t = e.target;
-  if (t.matches('input.skip')) save('review/skip', {id: t.dataset.id, keep: t.checked ? '1' : ''});
+  if (t.matches('input.skip')) save('review/skip', {id: t.dataset.id, keep: t.checked ? '1' : '', seen: t.dataset.seen || ''});
   else if (t.matches('select.label')) {
     const box = t.nextElementSibling;
     if (t.value === '__custom__') { box.hidden = false; box.querySelector('input').focus(); }
-    else { box.hidden = true; save('review/label', {id: t.dataset.id, label: t.value}); }
+    else { box.hidden = true; save('review/label', {id: t.dataset.id, label: t.value, seen: t.dataset.seen}); }
   }
-  else if (t.matches('input.pick')) save('review/pick', {conflict: t.dataset.conflict, choice: t.value});
+  else if (t.matches('input.pick')) save('review/pick', {conflict: t.dataset.conflict, choice: t.value, seen: t.dataset.seen});
 });
 document.addEventListener('click', e => {
   const b = e.target.closest('button.match');
@@ -524,7 +588,7 @@ document.addEventListener('click', e => {
   const c = e.target.closest('button.custom-save');
   if (c) {
     const label = c.previousElementSibling.value.trim();
-    if (label) { c.disabled = true; save('review/label', {id: c.dataset.id, label: label}); }
+    if (label) { c.disabled = true; save('review/label', {id: c.dataset.id, label: label, seen: c.dataset.seen}); }
   }
 });
 document.addEventListener('keydown', e => {

@@ -201,9 +201,11 @@ def read_some(options: dict, refs: list[str], new_groups: dict[str, list[str]] |
 
 def _read_some_icloud(account: dict, hrefs: list[str], new_groups: dict, run: _Run) -> None:
     key = f"icloud:{account['apple_id']}"
-    snapshot = storage.read_json(_snapshot_path(f"icloud-{account['apple_id']}"), [])
-    hrefs = list(dict.fromkeys(hrefs + [i["href"] for i in vcard.groups(snapshot).values()] + new_groups.get(key, [])))
+    snapshot = storage.read_json(_snapshot_path(f"icloud-{account['apple_id']}"), None)
     with ICloudAddressBook(account["apple_id"], account["app_password"]) as book:
+        if snapshot is None:  # deleted by hand, perhaps; without it every group would look deleted
+            snapshot = book.fetch_all()
+        hrefs = list(dict.fromkeys(hrefs + [i["href"] for i in vcard.groups(snapshot).values()] + new_groups.get(key, [])))
         items = book.fetch(hrefs)
         contacts, groups, photo_refs = vcard.read(key, items)
         for c in contacts:
@@ -282,7 +284,8 @@ def _check_icloud(account: dict, run: _Run) -> dict:
     row = _result("iCloud", account["label"] or "iCloud", account["apple_id"])
     key = f"icloud:{account['apple_id']}"
     if not account["apple_id"] or not account["app_password"]:
-        row["error"] = "Apple ID or app-specific password missing. Add them on the add-on's Configuration tab."
+        row["error"] = ("Apple ID or app-specific password missing. Add the account again under Manage accounts "
+                        "on the Contact Sync page.")
     else:
         try:
             with ICloudAddressBook(account["apple_id"], account["app_password"]) as book:

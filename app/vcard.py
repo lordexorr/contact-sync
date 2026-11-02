@@ -2,6 +2,7 @@
 import base64
 import re
 from collections import defaultdict
+from datetime import datetime, timezone
 
 from .model import Contact, Value, address_key, email_key, fold, label, label_text, phone_key, url_key
 
@@ -45,6 +46,11 @@ def groups(items: list[dict]) -> dict[str, dict]:
         if _is_group(props) and (name := _name(props)):
             found.setdefault(fold(name), item)
     return found
+
+
+def is_group(text: str) -> bool:
+    """Whether a vCard is a group rather than a contact."""
+    return _is_group(parse(text))
 
 
 def uid(text: str) -> str:
@@ -233,6 +239,21 @@ def edit(text: str, changes: dict, photo: tuple[bytes, str] | None = None,
         _add(card, value)
     for other in carry:
         _carry(card, other)
+    card.put("REV", datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))  # when the card last changed
+    return card.text()
+
+
+def with_backup_details(text: str, dates: list[tuple[str, str]], companies: list[tuple[str, str]]) -> str:
+    """A vCard with details only a backup carries: dates as (YYYY-MM-DD, type), and further companies as
+    (name, title)."""
+    card = _Card(text)
+    for date, kind in dates:
+        group = f"item{card.next_item()}"
+        omit = ";X-APPLE-OMIT-YEAR=1604" if date.startswith("1604-") else ""
+        shown = "_$!<Anniversary>!$_" if kind.lower() == "anniversary" else _esc(kind or "other")
+        card.insert(f"{group}.X-ABDATE{omit}:{date}", f"{group}.X-ABLabel:{shown}")
+    for name, title in companies:
+        card.insert(*([f"ORG:{_esc(name)}"] if name else []), *([f"TITLE:{_esc(title)}"] if title else []))
     return card.text()
 
 

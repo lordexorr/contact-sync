@@ -31,6 +31,7 @@ PERSON_FIELDS = ",".join([
 # Google limits how many changes one account takes a minute, and wants them one at a time.
 WRITE_GAP = 1.1  # seconds between writes
 RETRY_WAITS = (30, 60, 120)  # seconds to wait each time Google asks to slow down
+GLITCH_WAITS = (5, 20)  # seconds to wait each time Google has an internal error
 
 
 class GoogleError(Exception):
@@ -145,10 +146,10 @@ class GoogleContacts:
         self._write("PATCH", f"{resource}:updateContact", body, {"updatePersonFields": ",".join(fields)})
 
     def create_contact(self, body: dict) -> str:
-        return self._write("POST", "people:createContact", body)["resourceName"]
+        return self._write("POST", "people:createContact", body, creates=True)["resourceName"]
 
     def delete_contact(self, resource: str) -> None:
-        self._write("DELETE", f"{resource}:deleteContact")
+        self._write("DELETE", f"{resource}:deleteContact", gone_ok=True)
 
     def update_photo(self, resource: str, data: bytes) -> None:
         self._write("PATCH", f"{resource}:updateContactPhoto", {"photoBytes": base64.b64encode(data).decode()})
@@ -157,7 +158,7 @@ class GoogleContacts:
         self._write("DELETE", f"{resource}:deleteContactPhoto")
 
     def create_group(self, name: str) -> str:
-        return self._write("POST", "contactGroups", {"contactGroup": {"name": name}})["resourceName"]
+        return self._write("POST", "contactGroups", {"contactGroup": {"name": name}}, creates=True)["resourceName"]
 
     def delete_group(self, resource: str) -> None:
         self._write("DELETE", resource, params={"deleteContacts": "false"})  # the contacts in it stay
@@ -167,17 +168,23 @@ class GoogleContacts:
             body = {"resourceNamesToAdd": add[start:start + 1000], "resourceNamesToRemove": remove[start:start + 1000]}
             self._write("POST", f"{group}/members:modify", {k: v for k, v in body.items() if v})
 
-    def _write(self, method: str, path: str, body: dict | None = None, params: dict | None = None) -> dict:
-        waits = list(RETRY_WAITS)
+    def _write(self, method: str, path: str, body: dict | None = None, params: dict | None = None,
+               creates: bool = False, gone_ok: bool = False) -> dict:
+        """Send one change, trying again if Google is busy or has an internal error. Something being created
+        isn't sent again after an internal error, which may hide that it worked and would make a second copy."""
+        slow, glitch = list(RETRY_WAITS), [] if creates else list(GLITCH_WAITS)
         while True:
             time.sleep(max(0.0, self._last_write + WRITE_GAP - time.monotonic()))
             resp = self.session.request(method, f"{PEOPLE_API}/{path}", json=body, params=params, timeout=60,
                                         headers={"Authorization": f"Bearer {self._token()}"})
             self._last_write = time.monotonic()
-            if resp.status_code not in (429, 503) or not waits:
+            waits = slow if resp.status_code in (429, 503) else glitch if resp.status_code in (500, 502) else []
+            if not waits:
                 break
-            log.info("Google asked to slow down; waiting %d seconds", waits[0])
+            log.info("Google answered HTTP %d; waiting %d seconds", resp.status_code, waits[0])
             time.sleep(waits.pop(0))
+        if resp.status_code == 404 and gone_ok:  # already gone
+            return {}
         if resp.status_code >= 400:
             if "failedPrecondition" in resp.text or "FAILED_PRECONDITION" in resp.text:
                 raise GoogleError("It changed in Google after the check, so it was left as it is.")
@@ -212,8 +219,8 @@ class GoogleContacts:
                 if any(code in resp.text for code in RECONNECT_ERRORS):
                     raise GoogleError(
                         f"Google no longer accepts this sign-in ({_error_text(resp)}). It expired or was revoked, "
-                        "or the Google client ID or secret changed. Check those on the Configuration tab, "
-                        "then disconnect the account and connect it again."
+                        "or the Google client ID or secret changed. Check those under Manage accounts on the "
+                        "Contact Sync page, then disconnect the account and connect it again."
                     )
                 raise GoogleError(f"Google refused to refresh the sign-in: {_error_text(resp)}")
             data = resp.json()

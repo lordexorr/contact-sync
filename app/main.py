@@ -80,14 +80,19 @@ def start_check(state: State, daily: bool = False) -> None:
     # A check started during an apply waits for it to finish.
     if not state.checking:
         state.check_error = None
-        job = daily_check if daily else check.run_check
+        job = daily_check if daily else run_check
         state.check_task = asyncio.create_task(asyncio.to_thread(job, state.options))
         state.check_task.add_done_callback(lambda task: _record_failure(state, task))
 
 
+def run_check(options: dict) -> None:
+    check.run_check(options)
+    review.tidy_decisions(options)
+
+
 def daily_check(options: dict) -> None:
     """The scheduled check, then the daily notification when something is waiting."""
-    check.run_check(options)
+    run_check(options)
     if options["notify"] and (message := review.waiting_message(options)):
         notify.send(options["notify"], "Contact Sync", message)
 
@@ -176,7 +181,7 @@ async def review_duplicate(request: web.Request) -> web.Response:
 
 async def review_pick(request: web.Request) -> web.Response:
     form = await request.post()
-    review.pick(str(form.get("conflict", "")), str(form.get("choice", "")))
+    review.pick(str(form.get("conflict", "")), str(form.get("choice", "")), str(form.get("seen", "")))
     return web.Response(status=204)
 
 
@@ -184,13 +189,13 @@ async def review_label(request: web.Request) -> web.Response:
     form = await request.post()
     label = str(form.get("label", "")).strip()[:40]
     if label != review.CUSTOM:
-        review.pick(str(form.get("id", "")), label)
+        review.pick(str(form.get("id", "")), label, str(form.get("seen", "")))
     return web.Response(status=204)
 
 
 async def review_skip(request: web.Request) -> web.Response:
     form = await request.post()
-    review.set_skip(str(form.get("id", "")), bool(form.get("keep")))
+    review.set_skip(str(form.get("id", "")), bool(form.get("keep")), str(form.get("seen", "")))
     return web.Response(status=204)
 
 

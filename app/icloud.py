@@ -34,7 +34,11 @@ class ICloudAddressBook:
         self.session.close()
 
     def fetch_photo(self, url: str) -> bytes:
-        """A contact photo, which iCloud keeps as a separate file at the address in the vCard."""
+        """A contact photo, which iCloud keeps as a separate file at the address in the vCard. A card can hold
+        any address, and this connection signs in with the Apple ID, so only iCloud's own are read."""
+        address = urlparse(url)
+        if address.scheme != "https" or not (address.hostname or "").endswith(".icloud.com"):
+            raise ICloudError("The photo's address isn't at iCloud, so it wasn't downloaded.")
         resp = self.session.get(url, timeout=60)
         resp.raise_for_status()
         return resp.content

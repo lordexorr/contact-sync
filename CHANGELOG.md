@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.3.15
+
+- Fixed: a value picked in the review stayed picked for good, so it could undo a later edit: pick "Bobby", change it to "Rob" on a phone, and applying wrote "Bobby" back. A pick is now forgotten once the accounts agree, and a value that changes after you picked is asked about again. Label picks work the same way.
+- Fixed: a card with only a name could join two same-named people with different numbers or birthdays into one. Every pair is now asked about instead. **Different people** also holds when the two later share a number, and the same phone number or email with different birthdays is asked about.
+- Fixed: applying while an account couldn't be read made Contact Sync forget what that account held, so a contact deleted meanwhile came back once the account returned. It now keeps that record, and the Contact Sync page, the review and the Apply page say the account is left out.
+- Fixed: when more than 10 contacts had gone from an account and you applied without ticking them, the next review offered to copy them all back, already ticked. They now stay as they are, under **Ignored**, where ticking one copies it back, and the results page says how many.
+- Fixed: unticking a row also hid later changes to it, such as a new number under the same label. The row now comes back ticked when what it compares changes.
+- Fixed: applying one person ten times could push out every full backup. The last 10 of each kind are now kept.
+- Fixed: two birthdays on the same day with different years were treated as the same, and one was used without asking. They're now a value to choose. A birthday without a year still takes the year from one that has it.
+- Fixed: the Apple ID was sent to whatever address a card's photo line held. Photos are now read only from iCloud's own addresses.
+- Google's internal errors are tried again, except when creating something, where a retry could make a second copy. Deleting a Google contact that's already gone counts as done.
+- iCloud cards record when Contact Sync created or changed them, so "Last changed" and the most-recently-changed rule work for them.
+- Values that are nothing but symbols, such as an emoji nickname, now sync.
+- Two accounts with the same label each get their own column in the review.
+- Google addresses typed as free text no longer count as one address, and they copy to other accounts.
+- Numbers with another country code no longer pass for a US number ending in the same digits, and an extension stays part of the number.
+- In a backup, Google's `.vcf` now includes dates and further companies, and iCloud's leaves out group cards, which would import as contacts. The `.json` files still hold everything.
+- **Forget my decisions** asks first, and says what it undoes.
+- A one-person apply no longer loses the groups if a snapshot file was deleted by hand.
+- Error messages point to **Manage accounts**, not the Configuration tab.
+
+The first check after updating forgets picks and unticked rows for anything the accounts no longer differ on.
+
 ## 0.3.14
 
 - **Open the review** is always on the Contact Sync page, even when nothing is waiting, so ignored rows and past answers can still be changed. With nothing waiting, the page says how many are ignored and decided.

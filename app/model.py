@@ -15,6 +15,7 @@ LABEL_NAMES = {
 }
 
 _APPLE_LABEL = re.compile(r"^_\$!<(.+)>!\$_$")  # Apple's built-in labels, such as _$!<Mobile>!$_
+_EXTENSION = re.compile(r"\s*(?:[,;#]|ext\.?|x)\s*(\d+)\s*$", re.I)  # the end of a phone number, such as " x123"
 _STREET_WORDS = {
     "street": "st", "road": "rd", "avenue": "ave", "drive": "dr", "lane": "ln", "court": "ct", "boulevard": "blvd",
     "place": "pl", "terrace": "ter", "highway": "hwy", "route": "rte", "parkway": "pkwy", "circle": "cir",
@@ -78,15 +79,22 @@ class Contact:
 
 
 def fold(text: str) -> str:
-    """Lowercase without accents, punctuation or extra spaces, for comparing (never for display)."""
+    """Lowercase without accents, punctuation or extra spaces, for comparing (never for display). Text that's
+    nothing but symbols, such as an emoji, stays as it is, so it still counts as a value."""
     text = unicodedata.normalize("NFKD", text or "")
     text = "".join(ch for ch in text if not unicodedata.combining(ch)).lower()
-    return " ".join(re.sub(r"[^\w\s]", " ", text).split())
+    return " ".join(re.sub(r"[^\w\s]", " ", text).split()) or " ".join(text.split())
 
 
 def phone_key(value: str) -> str:
-    digits = re.sub(r"\D", "", value or "")
-    return digits[-10:] if len(digits) >= 10 else digits
+    """The number without formatting, and without the 1 on a US number. A number with another country code
+    keeps it, so it can't pass for a US number ending in the same digits. An extension stays part of the key."""
+    value = value or ""
+    extension = _EXTENSION.search(value)
+    digits = re.sub(r"\D", "", value[:extension.start()] if extension else value)
+    if len(digits) == 11 and digits[0] == "1":
+        digits = digits[1:]
+    return f"{digits}x{extension[1]}" if extension else digits
 
 
 def email_key(value: str) -> str:

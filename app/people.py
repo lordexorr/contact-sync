@@ -77,6 +77,18 @@ def new(changes: dict) -> dict:
     return {k: v for k, v in _changed({}, changes).items() if v}
 
 
+def backup_details(person: dict) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    """What a backup's .vcf holds beyond the details the sync compares: dates as (YYYY-MM-DD, type), with 1604
+    as Apple's placeholder for an unknown year, and companies after the first as (name, title)."""
+    dates = []
+    for entry in _own(person.get("events")):
+        d = entry.get("date") or {}
+        if d.get("month") and d.get("day"):
+            dates.append((f"{d.get('year') or 1604:04d}-{d['month']:02d}-{d['day']:02d}", entry.get("type", "")))
+    companies = [(o.get("name", ""), o.get("title", "")) for o in _own(person.get("organizations"))[1:]]
+    return dates, companies
+
+
 def google_type(value_label: str) -> str:
     """A label as Google stores it: one of its own types, or the label as shown here."""
     return _TYPES.get(value_label.lower().replace(" ", ""), LABEL_NAMES.get(value_label, value_label))
@@ -178,6 +190,8 @@ def _value(field: str, entry: dict) -> Value:
         parts = [street, entry.get("city", ""), entry.get("region", ""), entry.get("postalCode", ""),
                  entry.get("country", "")]
         text = entry.get("formattedValue", "").replace("\n", ", ") or ", ".join(filter(None, parts))
-        return Value(text, tag, address_key(street, parts[1], parts[3]), parts, odd)
+        if not any(parts):  # typed as free text, which counts as the street, where it goes in another account
+            street = parts[0] = text
+        return Value(text, tag, address_key(street, parts[1], parts[3]) if text else "", parts, odd)
     value = entry.get("person" if field == "related" else "value", "")
     return Value(value, tag, _KEYS[field](value), odd=odd)
