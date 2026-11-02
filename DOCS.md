@@ -12,7 +12,7 @@ Keeps contacts in sync across any number of iCloud and Google accounts, as one c
 
 Changing an Apple ID's main password revokes its app-specific passwords. If that happens, create a new one and add the account again on the Contact Sync page with it.
 
-### 2. Google OAuth client (once, shared by every Google account)
+### 2. Google app (an OAuth client, set up once for every Google account)
 
 1. Create a project for Contact Sync:
    1. Open the [Google Cloud console](https://console.cloud.google.com) and sign in.
@@ -46,35 +46,38 @@ Use a computer for this. The copy-and-paste step is awkward on a phone.
 4. The browser ends on a "This site can't be reached" page. That's expected. Copy the whole address from the address bar, paste it into Contact Sync, and press **Connect**.
 5. Repeat for each Google account.
 
+**Disconnect** forgets a Google account, deletes what was saved from it, and cancels its sign-in at Google.
+
 Then press **Check now**. Each account should show its contact count.
 
 ## Reviewing changes
 
-After each check, the **Review** section at the top of the Contact Sync page counts what a sync would change. **Open the review** shows the details.
+After each check, the **Review** section just below **Check now** counts what a sync would change. **Open the review** shows the details.
 
 - **Possible matches:** two contacts that might be the same person: the same name twice in one account, the same name with different phone numbers, emails or birthdays, or the same phone number or email address under different names. Each side shows everything that copy holds. Choose **Same person** or **Different people**, and the card moves to a collapsed **Decided** section, where you can change the answer.
-- **Different values:** a name, nickname, company, job title, birthday, note or photo that differs between accounts. Pick the value every account should have, and it moves to a collapsed **Decided** section. Until you pick, the value from the most recently changed contact is used, and it's marked as such.
+- **Different values:** a name, nickname, company, job title, birthday, note or photo that differs between accounts. Pick the value every account should have, and it moves to a collapsed **Decided** section. Until you pick, a value one account changed since the last sync is used over one left as it was; otherwise the value from the most recently changed contact. The one used is marked.
 - **Changes:** a table for each person that differs between accounts. Each account has a column showing what it has now, and the **After sync** column shows what every account will have once you apply. Only details that differ get a row: a person missing from an account; a name, nickname, company, job title, birthday, note or photo; each kind of phone number, email, address, website or related name (for example "Work address"); and labels that differ, including odd ones like "PREF", with a dropdown to pick the label. The dropdown's last choice, **Custom…**, opens a box to type any label, such as "Facebook" or "Personal"; iCloud and Google both keep it as typed. Struck-through values would be replaced or removed, values marked + would be added, and the green **After sync** column is what every account ends up with.
   - Untick a row to leave every account as it is for that row. It moves to a collapsed **Ignored** section at the bottom, where ticking it again brings it back.
   - In a list, such as two different work addresses, untick a value in **After sync** to leave it out of every account; it's removed from any account that has it.
   - Groups get a table of their own, with each account's member count. Google labels count as groups.
+  - A person waiting on a possible match has a note under their table instead of an **Apply just** button.
 - **Duplicates within one account:** the same person more than once in one account, with every card shown side by side. **Merge into one** keeps the card with the most details, moves everything from the other cards onto it (including details Contact Sync doesn't otherwise use, such as dates, social profiles and messaging handles), and deletes the others when you apply. The person's table then has a **Duplicate cards** row, which you can untick. **Keep both** leaves them as they are. Either choice moves the card to a collapsed **Decided** section, where you can switch. Until you choose, applying leaves the extra cards alone. A same-name pair in one account first appears under **Possible matches**; answering **Same person** brings it here.
 - **Start over** forgets every match, choice and skip.
 
-Contacts are matched automatically when they share a phone number or email address and their names agree, or when they have the same name in different accounts and nothing contradicts it. A first or last name on its own counts, so a business typed in as a first name still matches. Being matched only means the copies are the same person: every difference between them still appears under **Changes**. Everything you choose is saved the moment you click it, and kept for later checks.
+Contacts are matched automatically when they share a phone number or email address and their names agree, or when they have the same name in different accounts and nothing contradicts it. A first or last name on its own counts, and a card with no name goes by its company, so a business entered as a first name in one account and as the company in another still matches. Contacts that were one person at the last apply stay matched, even after a name or number changes in one account. Being matched only means the copies are the same person: every difference between them still appears under **Changes**. Everything you choose is saved the moment you click it, and kept for later checks.
 
 ## Applying changes
 
-Press **Apply changes…** at the bottom of the review to apply every ticked change, or **Apply just *name*…** under a person's table to apply only theirs, including their group changes. A page then shows how many contacts each account gains, has updated or deleted, and its group changes. Pressing **Apply now** does this:
+Press **Apply changes…** at the bottom of the review to apply every ticked change, or **Apply just *name*…** under a person's table to apply only theirs, including their group changes. A page then shows, for each account, how many contacts it gains, has updated or deleted, and which groups it creates, deletes, joins or leaves. Pressing **Apply now** does this:
 
-1. Checks every account again. If anything changed since that page opened, in an account or in the review, it stops without writing anything.
+1. Checks every account again. If anything changed since that page opened, in an account or in the review, it stops without writing anything. If an account can't be read, it stops and says which and why.
 2. Backs up every account (see below).
 3. Makes the changes, touching only the details shown in the review. Everything else on each contact stays as it is, including details only one service has. Photos are copied at full size.
 4. Checks again and records what every account now holds.
 
 Applying one person is quicker: it reads, backs up and rechecks only that person's cards, plus the groups, instead of every contact. It stops only if something about that person changed. Everyone else in the review stays as the latest check found them.
 
-The results page lists every change made and every one that wasn't, with the reason. A person with a failed change stays in the review, so applying again retries it.
+The results page lists every change made and every one that wasn't, with the reason. A person with a failed change stays in the review, so applying again retries it. A change that was made but has something to check is flagged in a **Check** column: for example, an iCloud card saved with its photo left as it was, because the photo couldn't be downloaded. The Contact Sync page shows when changes were last applied, with a link back to these results.
 
 - People in an unanswered possible match are left out until you answer it, so a sync can't create a second copy of someone.
 - A duplicate card being merged is deleted only after everything on it has been added to the card kept. If that fails, it's left as it is.
@@ -86,7 +89,7 @@ The record made after each apply is what lets later reviews tell a deletion from
 
 - A deleted contact shows as a **Contact** row that deletes it from every account. Untick it to leave every account as it is.
 - A deleted phone number, email, address, website or related name starts unticked in **After sync**, with a note saying where it was deleted. Tick it to keep it in every account instead.
-- A cleared name field, birthday, note or photo shows as removed from every account.
+- A cleared nickname, company, job title, birthday, note or photo shows as removed from every account. A name is never removed.
 - A group deleted from one account, or a person taken out of a group, is deleted from or taken out of the group in the other accounts.
 
 Until the first apply, nothing counts as deleted.
