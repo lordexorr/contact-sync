@@ -13,7 +13,7 @@ More of what's on each card now syncs, so every account can match more closely.
 - **Preferred values:** iCloud's preferred marker, which is always on the first value in a list, now goes on the first value in both iCloud accounts wherever either has one in a list of two or more. Putting a list in order also moves Google's primary marker to its first value.
 - **US country removed:** "US", "USA", "United States" and "United States of America" on any address with something else on it now show up in the review as a change to remove them. You don't have to pick a wording, you can untick the row, and nothing is written until you apply. Other countries stay. If an account adds one back, the next review shows it again.
 - **Dates:** anniversaries and other dates now sync as a list, with labels and deletions carried across like phone numbers. A date without a year takes the year from one that has it, and two different years are a choice.
-- **Details only Google can hold:** a new review section for other companies and locations, which iCloud has no room for. For each person, choose the main company, which every account will show, and choose **Move to Notes** or **Delete** for every other detail, with nothing chosen for you. Until everything about a person is chosen, those details stay as they are. An exact repeat of the main company goes without asking.
+- **Details only Google can hold:** a new review section for other companies and locations, which iCloud has no room for. For each person, choose the main company, which every account will show, and choose **Move to Notes** or **Delete** for every other detail, with nothing chosen for you. Until everything about a person is chosen, those details stay as they are. An exact repeat of the main company shows under **Changes** as a row to remove it, without asking you to choose.
 - **Company cards:** iCloud's setting for showing a card as a company is now kept the same between iCloud accounts. A change in one account since the last apply carries over, including turning it off.
 - **Labels:** "X-Personal" and "Email" now count as leftovers, like "PREF", and start on "other" with a dropdown to pick the real label. "Fax" typed as a label becomes the real fax type.
 - The label rows show the odd label as the account has it, not always "PREF".
@@ -23,7 +23,7 @@ More of what's on each card now syncs, so every account can match more closely.
 Every account can now end up literally the same.
 
 - Values that differ only in how they're written now show as differences: capitals and punctuation in a name, nickname, company, job title or note, and any different wording of a phone number, email, address, website or related name, such as "NY" and "New York", "Rd" and "Road", or a country on one copy but not another. Pick the wording under **Different values**, and a **How this … is written** row applies it to every account. People are still matched the forgiving way, so this never splits anyone in two.
-- Stray spaces are removed without asking, and the row says "extra space".
+- Stray spaces show up in the review as a change to remove them, on a row that says "extra space". You don't have to pick a wording, you can untick the row, and nothing is written until you apply.
 - A value listed more than once on a card is reduced to one, so every account holds it the same number of times.
 - An address with only a state or region now goes by it, with a US state's abbreviation counting as its name, so "NY" and "New York" are one address and "NY" and "MA" are two.
 
