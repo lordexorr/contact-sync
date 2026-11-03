@@ -92,6 +92,30 @@ def decide_extra(extra_id: str, choice: str) -> None:
     _update(change)
 
 
+def choose_group(key: str, group: str) -> None:
+    """A group for someone in none, in place of any chosen before, waiting to be applied the same as one chosen on
+    their form. An empty one leaves them in none, and the review stops asking."""
+    group = plan.tidy_text("company", group)[:60]
+    if not key or group == CUSTOM:
+        return
+
+    def change(d):
+        edits = d.setdefault("edits", {})
+        edit = {k: v for k, v in edits.get(key, {"set": {}, "lists": {}}).items() if k != "groups"}
+        left_out = set(d.get("no_group", [])) - {key}
+        if group:
+            edit["groups"] = {"from": [], "to": [group]}
+            d["skips"] = [i for i in d.get("skips", []) if i != f"group|{fold(group)}"]
+        else:
+            left_out.add(key)
+        if any(edit.values()):
+            edits[key] = edit
+        else:
+            edits.pop(key, None)
+        d["no_group"] = sorted(left_out)
+    _update(change)
+
+
 def pick(choice_id: str, choice: str, seen: str = "") -> None:
     """A value picked for a field that differs between accounts, or a label picked for one value. seen
     fingerprints what it was picked between (see plan._Picks)."""
@@ -212,6 +236,9 @@ def tidy(d: dict, review: dict) -> None:
     # A pending edit lasts until every account holds it, and a delete until the person is gone.
     people, settled = review["sync"]["people"], review.get("edit_settled", {})
     d["deletes"] = [k for k in d.get("deletes", []) if k in people]
+    # Someone waiting on a possible match isn't asked about for now, which doesn't change the answer.
+    ungrouped = {u["id"] for u in review.get("ungrouped", [])}
+    d["no_group"] = [k for k in d.get("no_group", []) if k in ungrouped or people.get(k, {}).get("held")]
     edits = {}
     for key, edit in d.get("edits", {}).items():
         done = settled.get(key, {})
@@ -252,7 +279,8 @@ def summary_card(review: dict | None, last_apply: str = "") -> str:
                    + sum(r["skipped"] for r in review["groups"]))
         decided = (sum(c["decided"] for c in review["conflicts"]) + len(review["decided_matches"])
                    + sum(bool(d["choice"]) for d in review["duplicates"])
-                   + sum(d["complete"] for d in review.get("extras", [])))
+                   + sum(d["complete"] for d in review.get("extras", []))
+                   + sum(u["decided"] for u in review.get("ungrouped", [])))
         kept = " and ".join(filter(None, (f"{ignored:,} ignored" if ignored else "",
                                           f"{decided:,} decided" if decided else "")))
         matches = "Every account that could be read matches." if review.get("unread") else "Every account matches."
@@ -280,6 +308,8 @@ def page_body(review: dict | None) -> str:
         parts.append(_extras(review["extras"]))
     if review["conflicts"]:
         parts.append(_conflicts(review["conflicts"]))
+    if review["ungrouped"]:
+        parts.append(_ungrouped(review))
     if review["people"] or review["groups"]:
         parts.append(_changes(review))
     if not plan.is_empty(plan.scope(review)):  # at the end, where the review finishes
@@ -306,6 +336,8 @@ def _counts_line(counts: dict) -> str:
         parts.append(f"{_n(counts['duplicates'], 'duplicate')} to decide")
     if counts.get("extras"):
         parts.append(f"{_n(counts['extras'], 'extra detail')} to decide")
+    if counts.get("ungrouped"):
+        parts.append(f"{_n(counts['ungrouped'], 'contact')} to put in a group")
     return " · ".join(parts)
 
 
@@ -551,6 +583,41 @@ def _extras(items: list[dict]) -> str:
             f"everything about a person is chosen, these details stay as they are.</p>{body}{folded}</section>")
 
 
+def _ungrouped(review: dict) -> str:
+    """People in no group. Undecided ones on top; decided ones in a collapsed section, where another choice is still
+    a click away. A new group typed for one person is offered for the rest, before any account has it."""
+    items = review["ungrouped"]
+    typed = {fold(g): g for u in items for g in u["groups"]}
+    choices = sorted((typed | {fold(g): g for g in review["group_names"]}).values(), key=fold)
+
+    def card(u: dict) -> str:
+        key = esc(u["id"])
+        only = fold(u["groups"][0]) if len(u["groups"]) == 1 else ""
+        options = "<option value=''>Choose a group</option>" + "".join(
+            f"<option value='{esc(g)}'{' selected' if fold(g) == only else ''}>{esc(g)}</option>" for g in choices)
+        said = (f"Joins {', '.join(u['groups'])} when you apply." if u["groups"]
+                else "Staying in no group." if u["decided"] else "")
+        none = ("" if u["decided"] and not u["groups"]
+                else f"<button type='button' class='no-group secondary' data-id='{key}'>No group</button>")
+        return (f"<div class='item'>{_copy(u['contact'], '')}<div class='row'>"
+                + (f"<span class='muted'>{esc(said)}</span>" if said else "")
+                + f"<select class='group' autocomplete='off' data-id='{key}'>{options}"
+                f"<option value='{CUSTOM}'>New group…</option></select><span class='custom' hidden>"
+                "<input type='text' autocomplete='off' maxlength='60' placeholder='Group name'>"
+                f"<button type='button' class='group-save' data-id='{key}'>Save</button></span>{none}"
+                f"<a class='button secondary' href='contact/edit?person={esc(quote(u['id'], safe=''))}'>Edit</a></div></div>")
+
+    waiting = [card(u) for u in items if not u["decided"]]
+    decided = [card(u) for u in items if u["decided"]]
+    folded = (f"<details class='fold'><summary>Decided ({len(decided)})</summary>{''.join(decided)}</details>"
+              if decided else "")
+    body = "".join(waiting) or "<p class='muted'>Nothing left to decide.</p>"
+    return (f"<section class='card'><h2>Not in a group ({len(waiting)} to decide)</h2><p class='muted'>Choose a group, "
+            "and applying adds them to it in every account. <b>No group</b> stops asking about them, unless they join "
+            "a group and later leave it. For more than one group, use <b>Edit</b>. Until you choose, they stay as they "
+            f"are.</p>{body}{folded}</section>")
+
+
 def apply_body(review: dict | None, person: str | None, checking: bool) -> str:
     """The page before applying: what changes in each account, and the Apply now button."""
     if review is None:
@@ -588,6 +655,10 @@ def apply_body(review: dict | None, person: str | None, checking: bool) -> str:
     if open_extras and not plan.is_empty(work):
         notes.append(f"{_n(open_extras, 'extra detail')} {'hasn' if open_extras == 1 else 'haven'}'t been decided. "
                      "They're left as they are.")
+    open_groups = sum(not u["decided"] and (person is None or u["id"] == person) for u in review["ungrouped"])
+    if open_groups and not plan.is_empty(work):
+        notes.append(f"{_n(open_groups, 'contact')} {'isn' if open_groups == 1 else 'aren'}'t in a group yet, and "
+                     f"{'stays' if open_groups == 1 else 'stay'} that way until you choose in the review.")
     notes_html = "".join(f"<p class='muted'>{esc(n)}</p>" for n in notes)
     back = "<a href='review'>Back to the review</a>"
     buttons = pending_buttons(review, person) if person in people else ""
@@ -737,6 +808,12 @@ document.addEventListener('change', e => {
     if (t.value === '__custom__') { box.hidden = false; box.querySelector('input').focus(); }
     else { box.hidden = true; save('review/label', {id: t.dataset.id, label: t.value, seen: t.dataset.seen}); }
   }
+  else if (t.matches('select.group')) {
+    const box = t.nextElementSibling;
+    box.hidden = t.value !== '__custom__';
+    if (!box.hidden) box.querySelector('input').focus();
+    else if (t.value) save('review/group', {id: t.dataset.id, group: t.value});
+  }
   else if (t.matches('input.pick')) save('review/pick', {conflict: t.dataset.conflict, choice: t.value, seen: t.dataset.seen});
   else if (t.matches('input.extra')) save('review/extra', {id: t.dataset.id, choice: t.value});
 });
@@ -745,6 +822,13 @@ document.addEventListener('click', e => {
   if (b) { b.disabled = true; save('review/match', {pair: b.dataset.pair, decision: b.dataset.decision}); }
   const d = e.target.closest('button.dup');
   if (d) { d.disabled = true; save('review/duplicate', {id: d.dataset.id, decision: d.dataset.decision}); }
+  const n = e.target.closest('button.no-group');
+  if (n) { n.disabled = true; save('review/group', {id: n.dataset.id, group: ''}); }
+  const g = e.target.closest('button.group-save');
+  if (g) {
+    const group = g.previousElementSibling.value.trim();
+    if (group) { g.disabled = true; save('review/group', {id: g.dataset.id, group: group}); }
+  }
   const c = e.target.closest('button.custom-save');
   if (c) {
     const label = c.previousElementSibling.value.trim();

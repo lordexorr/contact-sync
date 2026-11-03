@@ -44,9 +44,9 @@ def build(contacts: list[Contact], accounts: list[dict], decisions: dict, base: 
     is, a skipped list value ("<person>|<field>=<value>") is left out of every account, and a kept one stays
     in every account even when an account deleted it. "pick_seen" and "skip_seen" fingerprint what a pick or
     an unticked row was about, so it stops counting once that changes. "extras" says what happens to each
-    detail only Google can hold: "main", "notes" or "delete". "edits", "deletes" and "new_people" hold what was
-    entered on the Contacts pages, waiting to be applied (see edit_from and new_person). base is what the
-    accounts held after the last apply (see base.py).
+    detail only Google can hold: "main", "notes" or "delete". "no_group" lists the people in no group who don't
+    need one. "edits", "deletes" and "new_people" hold what was entered on the Contacts pages, waiting to be
+    applied (see edit_from and new_person). base is what the accounts held after the last apply (see base.py).
 
     review["sync"] holds the edits: for each person, the copies to delete, create and update, and the group
     changes, one per account and group. Skipped rows make none. review["directory"] and review["views"] are
@@ -73,9 +73,11 @@ def build(contacts: list[Contact], accounts: list[dict], decisions: dict, base: 
     keyed = _decision_keys(decisions)
     edits, deleting = decisions.get("edits", {}), set(decisions.get("deletes", []))
     new_people = decisions.get("new_people", {})
+    no_group = set(decisions.get("no_group", []))
 
     review = {"columns": list(names.values()), "suggestions": [], "conflicts": [], "people": [], "groups": [],
-              "duplicates": [], "extras": [], "clusters": clusters, "sync": {"names": names, "people": {}, "groups": []},
+              "duplicates": [], "extras": [], "ungrouped": [], "clusters": clusters,
+              "sync": {"names": names, "people": {}, "groups": []},
               "directory": [], "views": {}, "pending": {}, "edit_settled": {},
               "group_names": sorted(spelling.values(), key=fold),
               "warnings": [f"{gone[a]:,} contacts have gone from {names[a]} since the last sync, more than usual. "
@@ -129,6 +131,13 @@ def build(contacts: list[Contact], accounts: list[dict], decisions: dict, base: 
                 })
             if merged["extras"]["entries"]:
                 review["extras"].append({"id": key, "person": merged["display"], **merged["extras"]})
+            # Someone in a group in any account isn't asked about: that group is copied to the rest.
+            if not merged["baseline"]["groups"] and not person.ops["held"]:
+                review["ungrouped"].append({
+                    "id": key, "groups": merged["groups"], "decided": bool(merged["groups"]) or key in no_group,
+                    "contact": {**_summary(max(person.first.values(), key=_detail_count), names),
+                                "name": merged["display"]},
+                })
         review["sync"]["people"][key] = person.ops
         if person.rows:
             review["people"].append({"key": key, "name": merged["display"], "rows": person.rows,
@@ -141,6 +150,7 @@ def build(contacts: list[Contact], accounts: list[dict], decisions: dict, base: 
     spelling = {fold(g): g for g in typed} | spelling
     review["people"].sort(key=lambda p: fold(p["name"]))
     review["directory"].sort(key=lambda d: fold(d["name"]))
+    review["ungrouped"].sort(key=lambda u: fold(u["contact"]["name"]))
     review["groups"], review["sync"]["groups"] = _group_rows(
         names, have, dropped, spelling, members, to_group, from_group, totals, skips, last)
     rows, ops = _listed_rows(names, unlisted, skips)
@@ -154,6 +164,7 @@ def build(contacts: list[Contact], accounts: list[dict], decisions: dict, base: 
         "conflicts": sum(not c["decided"] for c in review["conflicts"]),
         "duplicates": sum(not d["choice"] for d in review["duplicates"]),
         "extras": sum(not e["choice"] for d in review["extras"] for e in d["entries"]),
+        "ungrouped": sum(not u["decided"] for u in review["ungrouped"]),
     }
     return review
 
@@ -345,7 +356,7 @@ def _decision_keys(decisions: dict) -> set[str]:
     """The person keys that unticks, picks and duplicate choices are filed under ("<account>|<id>")."""
     ids = [*decisions.get("skips", []), *decisions.get("keeps", []), *decisions.get("picks", {}),
            *decisions.get("duplicates", {}), *decisions.get("extras", {}), *decisions.get("edits", {}),
-           *decisions.get("deletes", [])]
+           *decisions.get("deletes", []), *decisions.get("no_group", [])]
     return {"|".join(i.split("|", 2)[:2]) for i in ids if not i.startswith("group|")}
 
 

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.3
+
+- **Not in a group:** the review lists anyone who isn't in a group in any account as something to decide, and they count on the Contact Sync page and in the daily notification until you do. Choose a group from the dropdown, or **New group…**, and applying adds them to it in every account. **No group** stops asking about them unless they join a group and later leave it. Either choice moves the card to a collapsed **Decided** section, where you can change it.
+
 ## 0.4.2
 
 - **Groups on the contact form:** add someone to any of your groups from a dropdown, or to a **New group…** created in every account, and take them out of one. This works when adding a new contact too. Removing someone never deletes the group, even if they were its last member. The **Apply** page names the groups they join and leave in each account, and nothing changes until you press **Apply now**.

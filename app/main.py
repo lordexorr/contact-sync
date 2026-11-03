@@ -186,6 +186,12 @@ async def review_extra(request: web.Request) -> web.Response:
     return web.Response(status=204)
 
 
+async def review_group(request: web.Request) -> web.Response:
+    form = await request.post()
+    review.choose_group(str(form.get("id", "")), str(form.get("group", "")))
+    return web.Response(status=204)
+
+
 async def review_pick(request: web.Request) -> web.Response:
     form = await request.post()
     review.pick(str(form.get("conflict", "")), str(form.get("choice", "")), str(form.get("seen", "")))
@@ -655,6 +661,7 @@ def main() -> None:
         web.post("/review/match", review_match),
         web.post("/review/duplicate", review_duplicate),
         web.post("/review/extra", review_extra),
+        web.post("/review/group", review_group),
         web.post("/review/pick", review_pick),
         web.post("/review/label", review_label),
         web.post("/review/skip", review_skip),
