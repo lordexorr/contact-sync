@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.4
+
+- **Leave as they are:** a choice under **Different values**, such as which photo or nickname every account should have, can now be left as each account has it. It moves to **Decided**, stops counting as something to decide on the Contact Sync page and in the daily notification, and nothing about it is written. Unticking the value's row under **Changes** does the same, so a value you've chosen to leave alone no longer keeps asking. Picking a value later ticks the row again, and it's asked again only if one of the values changes. Choices of order, and between your edit and what changed since, work as before.
+
 ## 0.4.3
 
 - **Not in a group:** the review lists anyone who isn't in a group in any account as something to decide, and they count on the Contact Sync page and in the daily notification until you do. Choose a group from the dropdown, or **New group…**, and applying adds them to it in every account. **No group** stops asking about them unless they join a group and later leave it. Either choice moves the card to a collapsed **Decided** section, where you can change it.

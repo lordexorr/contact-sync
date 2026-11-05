@@ -103,9 +103,9 @@ def build(contacts: list[Contact], accounts: list[dict], decisions: dict, base: 
         # sort ahead of it, so a person keeps the key their decisions already use.
         key = next((r for r in refs if r in keyed), refs[0])
         merged, conflicts = _merge(key, copies, picks, names, last, decisions.get("extras", {}), edits.get(key))
-        review["conflicts"] += [{**c, "person": merged["display"]} for c in conflicts]
         person = _Person(key, copies, merged, names, skips, keeps, last, picks, key in deleting)
         person.compare(duplicates, mass)
+        review["conflicts"] += [{**c, "person": merged["display"], **_left(key, c, person.rows)} for c in conflicts]
         review["conflicts"] += [{**c, "person": merged["display"]} for c in person.conflicts]
         person.ops["held"] = refs[0] in waiting
         if key in edits or key in deleting:
@@ -161,7 +161,7 @@ def build(contacts: list[Contact], accounts: list[dict], decisions: dict, base: 
     review["counts"] = {
         "changes": sum(not r["skipped"] for r in rows),
         "suggestions": len(review["suggestions"]),
-        "conflicts": sum(not c["decided"] for c in review["conflicts"]),
+        "conflicts": sum(not c["decided"] and not c.get("left") for c in review["conflicts"]),
         "duplicates": sum(not d["choice"] for d in review["duplicates"]),
         "extras": sum(not e["choice"] for d in review["extras"] for e in d["entries"]),
         "ungrouped": sum(not u["decided"] for u in review["ungrouped"]),
@@ -785,6 +785,17 @@ def _choose(conflict_id: str, options: dict, picks: _Picks, changed: set) -> str
         return picked
     pool = [k for k in options if k in changed] or list(options)
     return max(pool, key=lambda k: _newest(options[k]["contacts"]).updated or "")
+
+
+def _left(key: str, conflict: dict, rows: list[dict]) -> dict:
+    """The row a value decides, which Leave as they are unticks. An unticked row leaves every account as it is,
+    so the value counts as decided either way. Choices between an edit and what changed since have no such row."""
+    rest = conflict["id"][len(key) + 1:]
+    row_id = conflict["id"] if "#" in rest else f"{key}|field:{rest}"
+    row = None if conflict.get("required") else next((r for r in rows if r["id"] == row_id), None)
+    if row is None:
+        return {"row": "", "row_seen": "", "left": False}
+    return {"row": row_id, "row_seen": row["seen"], "left": row["skipped"]}
 
 
 def _conflict(conflict_id: str, title: str, options: dict, chosen: str, names: dict, picks: _Picks, describe) -> dict:

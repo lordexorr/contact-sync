@@ -116,31 +116,34 @@ def choose_group(key: str, group: str) -> None:
     _update(change)
 
 
-def pick(choice_id: str, choice: str, seen: str = "") -> None:
+def pick(choice_id: str, choice: str, seen: str = "", row: str = "") -> None:
     """A value picked for a field that differs between accounts, or a label picked for one value. seen
-    fingerprints what it was picked between (see plan._Picks)."""
+    fingerprints what it was picked between (see plan._Picks). row is the value's row when Leave as they are
+    unticked it: picking a value ticks it again."""
     if not (choice_id and choice):
         return
 
     def change(d):
         d.setdefault("picks", {})[choice_id] = choice
         _note_seen(d.setdefault("pick_seen", {}), choice_id, seen)
+        if row:
+            _tick(d, row, True, "")
     _update(change)
 
 
 def set_skip(change_id: str, keep: bool, seen: str = "") -> None:
     """Tick or untick a row or a list value. seen fingerprints what an unticked row compares (see plan._Skips)."""
-    if not change_id:
-        return
+    if change_id:
+        _update(lambda d: _tick(d, change_id, keep, seen))
 
-    def change(d):
-        # "keeps" holds what was ticked again, so a value an account deleted can be kept everywhere instead.
-        skips, keeps = set(d.get("skips", [])), set(d.get("keeps", []))
-        (skips.discard if keep else skips.add)(change_id)
-        (keeps.add if keep else keeps.discard)(change_id)
-        d["skips"], d["keeps"] = sorted(skips), sorted(keeps)
-        _note_seen(d.setdefault("skip_seen", {}), change_id, "" if keep else seen)
-    _update(change)
+
+def _tick(d: dict, change_id: str, keep: bool, seen: str) -> None:
+    # "keeps" holds what was ticked again, so a value an account deleted can be kept everywhere instead.
+    skips, keeps = set(d.get("skips", [])), set(d.get("keeps", []))
+    (skips.discard if keep else skips.add)(change_id)
+    (keeps.add if keep else keeps.discard)(change_id)
+    d["skips"], d["keeps"] = sorted(skips), sorted(keeps)
+    _note_seen(d.setdefault("skip_seen", {}), change_id, "" if keep else seen)
 
 
 def keep_unticked(row_ids: list[str]) -> None:
@@ -277,7 +280,7 @@ def summary_card(review: dict | None, last_apply: str = "") -> str:
         # The review stays open even with nothing waiting, so ignored rows and past answers can be changed.
         ignored = (sum(r["skipped"] for p in review["people"] for r in p["rows"])
                    + sum(r["skipped"] for r in review["groups"]))
-        decided = (sum(c["decided"] for c in review["conflicts"]) + len(review["decided_matches"])
+        decided = (sum(c["decided"] or c.get("left", False) for c in review["conflicts"]) + len(review["decided_matches"])
                    + sum(bool(d["choice"]) for d in review["duplicates"])
                    + sum(d["complete"] for d in review.get("extras", []))
                    + sum(u["decided"] for u in review.get("ungrouped", [])))
@@ -380,32 +383,42 @@ def _suggestions(items: list[dict], decided: list[dict]) -> str:
 
 def _conflicts(items: list[dict]) -> str:
     """Values still to decide on top. Until one is picked, nothing is selected and the value that will be used
-    is marked, so any click counts as a decision; decided ones sit in a collapsed section below."""
+    is marked, so any click counts as a decision; decided ones sit in a collapsed section below. Leave as they
+    are unticks the value's row, and picking a value after it ticks the row again."""
     def row(i: int, c: dict) -> str:
+        left = c.get("left", False)
+        again = f" data-row='{esc(c['row'])}'" if left else ""
         options = []
         for o in c["options"]:
-            picked = c["decided"] and o["key"] == c["chosen"]
-            default = "" if c["decided"] or o["key"] != c["chosen"] else (
+            picked = c["decided"] and not left and o["key"] == c["chosen"]
+            default = "" if c["decided"] or left or o["key"] != c["chosen"] else (
                 "<span class='muted'>· used unless you pick another</span>")
             shown = (f"<img class='thumb' src='thumb/{esc(o['thumb'])}.jpg' alt=''>" if o.get("thumb")
                      else f"<span>{esc(o['value'])}</span>")
             options.append(
                 f"<label class='option'><input type='radio' class='pick' autocomplete='off' name='choice-{i}' "
-                f"data-conflict='{esc(c['id'])}' data-seen='{esc(c['seen'])}' value='{esc(o['key'])}'"
+                f"data-conflict='{esc(c['id'])}' data-seen='{esc(c['seen'])}' value='{esc(o['key'])}'{again}"
                 f"{' checked' if picked else ''}>"
                 f"{shown}<span class='muted'>{esc(', '.join(o['accounts']))}</span>{default}</label>"
+            )
+        if c.get("row"):
+            options.append(
+                f"<label class='option'><input type='radio' class='leave' autocomplete='off' name='choice-{i}' "
+                f"data-id='{esc(c['row'])}' data-seen='{esc(c['row_seen'])}'{' checked' if left else ''}>"
+                "<span>Leave as they are</span><span class='muted'>each account keeps its own</span></label>"
             )
         waiting = c.get("waiting", "Until you choose, every account keeps its own order.")
         waits = f"<p class='muted'>{esc(waiting)}</p>" if c.get("required") and not c["decided"] else ""
         return f"<div class='item'><b>{esc(c['person'])}</b> · {esc(c['field'])}{''.join(options)}{waits}</div>"
 
-    waiting = [row(i, c) for i, c in enumerate(items) if not c["decided"]]
-    decided = [row(i, c) for i, c in enumerate(items) if c["decided"]]
+    waiting = [row(i, c) for i, c in enumerate(items) if not (c["decided"] or c.get("left"))]
+    decided = [row(i, c) for i, c in enumerate(items) if c["decided"] or c.get("left")]
     folded = (f"<details class='fold'><summary>Decided ({len(decided)})</summary>{''.join(decided)}</details>"
               if decided else "")
     body = "".join(waiting) or "<p class='muted'>Nothing left to decide.</p>"
     return (f"<section class='card'><h2>Different values ({len(waiting)} to decide)</h2><p class='muted'>Pick "
-            "the value every account should have.</p>" f"{body}{folded}</section>")
+            "the value every account should have, or <b>Leave as they are</b> to keep each account's own.</p>"
+            f"{body}{folded}</section>")
 
 
 def _changes(review: dict) -> str:
@@ -631,8 +644,8 @@ def apply_body(review: dict | None, person: str | None, checking: bool) -> str:
                      "left out until you answer it in the review.")
     elif person in people and people[person]["held"]:
         notes.append("This person is waiting on a possible match. Answer it in the review first.")
-    undecided = sum(not c["decided"] and not c.get("required") and (person is None or c["id"].startswith(person + "|"))
-                    for c in review["conflicts"])
+    undecided = sum(not c["decided"] and not c.get("required") and not c.get("left")
+                    and (person is None or c["id"].startswith(person + "|")) for c in review["conflicts"])
     if undecided and not plan.is_empty(work):
         notes.append(f"{_n(undecided, 'value')} between accounts {'hasn' if undecided == 1 else 'haven'}'t been "
                      "picked. The value marked in the review is used.")
@@ -814,7 +827,8 @@ document.addEventListener('change', e => {
     if (!box.hidden) box.querySelector('input').focus();
     else if (t.value) save('review/group', {id: t.dataset.id, group: t.value});
   }
-  else if (t.matches('input.pick')) save('review/pick', {conflict: t.dataset.conflict, choice: t.value, seen: t.dataset.seen});
+  else if (t.matches('input.pick')) save('review/pick', {conflict: t.dataset.conflict, choice: t.value, seen: t.dataset.seen, row: t.dataset.row || ''});
+  else if (t.matches('input.leave')) save('review/skip', {id: t.dataset.id, keep: '', seen: t.dataset.seen});
   else if (t.matches('input.extra')) save('review/extra', {id: t.dataset.id, choice: t.value});
 });
 document.addEventListener('click', e => {

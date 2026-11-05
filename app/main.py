@@ -194,7 +194,8 @@ async def review_group(request: web.Request) -> web.Response:
 
 async def review_pick(request: web.Request) -> web.Response:
     form = await request.post()
-    review.pick(str(form.get("conflict", "")), str(form.get("choice", "")), str(form.get("seen", "")))
+    review.pick(str(form.get("conflict", "")), str(form.get("choice", "")), str(form.get("seen", "")),
+                str(form.get("row", "")))
     return web.Response(status=204)
 
 
