@@ -50,7 +50,7 @@ def fingerprint(data: bytes) -> str:
     """A 64-bit difference hash, as 16 hex digits. Also saves a small thumbnail for the review page."""
     with Image.open(io.BytesIO(data)) as original:
         img = original.convert("RGB")
-    pixels = list(img.convert("L").resize((9, 8), Image.Resampling.LANCZOS).getdata())
+    pixels = img.convert("L").resize((9, 8), Image.Resampling.LANCZOS).get_flattened_data()
     bits = 0
     for row in range(8):
         for col in range(8):
