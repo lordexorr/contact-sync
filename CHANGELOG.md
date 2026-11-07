@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.0b1
+
+Contact Sync is now a Home Assistant integration, installed through HACS, instead of an add-on. It does everything it did before, on its page in the sidebar. This is a test version.
+
+- **Setup is in Home Assistant:** add Contact Sync under Devices & services, then each account with **Add iCloud account** or **Add Google account**. **Configure** sets the daily check time and notification, and **Reconfigure** changes the Google app. Accounts don't carry over from the add-on: add each one again.
+- **The page** is rebuilt as a panel in Home Assistant's sidebar, in your theme's colours, for administrators only. Choices in the review save without reloading the page.
+- **Entities** for automations and dashboards: **Changes Waiting**, with what's still to decide in its attributes; **Last Check**, with any account that couldn't be read; and a **Check Now** button.
+- Snapshots and backups are in `contact_sync` in Home Assistant's config folder, and everything else Contact Sync keeps is in `.storage/contact_sync`. Home Assistant's backups include both.
+- Photo fingerprints use the newer Pillow call, so Home Assistant logs no warning about it.
+
 ## 0.4.4
 
 - **Leave as they are:** a choice under **Different values**, such as which photo or nickname every account should have, can now be left as each account has it. It moves to **Decided**, stops counting as something to decide on the Contact Sync page and in the daily notification, and nothing about it is written. Unticking the value's row under **Changes** does the same, so a value you've chosen to leave alone no longer keeps asking. Picking a value later ticks the row again, and it's asked again only if one of the values changes. Choices of order, and between your edit and what changed since, work as before.

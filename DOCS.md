@@ -2,53 +2,7 @@
 
 Keeps contacts in sync across any number of iCloud and Google accounts, as one combined list. It checks once a day and whenever you press **Check now**, and writes nothing to any account until you review the changes and apply them yourself. Each apply makes a backup before anything is written.
 
-## Setup
-
-### 1. Apple app-specific password (each iCloud account)
-
-1. Sign in at [account.apple.com](https://account.apple.com).
-2. **Sign-In and Security → App-Specific Passwords**: create one named "Contact Sync".
-3. Copy it. It looks like `abcd-efgh-ijkl-mnop`.
-
-Changing an Apple ID's main password revokes its app-specific passwords. If that happens, create a new one and add the account again on the Contact Sync page with it.
-
-### 2. Google app (an OAuth client, set up once for every Google account)
-
-1. Create a project for Contact Sync:
-   1. Open the [Google Cloud console](https://console.cloud.google.com) and sign in.
-   2. Click the project picker at the top of the page (it shows the current project's name), then **New project**.
-   3. Name it "Contact Sync" and click **Create**.
-   4. Select the new project in the project picker. Every step below applies to whichever project is selected, so check that its name shows at the top before continuing.
-2. **APIs & Services → Library**: find **Google People API** and enable it.
-3. **OAuth consent screen** (it opens *Google Auth Platform*) → **Get started**: app name "Contact Sync", your email for support and contact, audience **External**.
-4. **Branding**: Google won't publish the app until its app domain is filled in. Set **Application home page** and **Application privacy policy link** to pages you control (your copy of this repository works, for example its README), leave the terms of service link blank, and add that site's domain (for example `github.com`) under **Authorized domains**. Leave **App logo** empty: uploading one means Google has to review the app before anyone can sign in. Save.
-5. **Audience → Publish app**. Publishing status must read **In production**. In *Testing*, Google signs Contact Sync out every 7 days.
-6. **Clients → Create client**: application type **Desktop app**, name "Contact Sync".
-7. Copy the **Client ID** and **Client secret** before closing the dialog. Google shows the secret only once.
-
-### 3. Start the add-on and save the Google app
-
-On the **Info** tab, turn on **Show in sidebar**, and start the add-on. Open **Contact Sync** in the sidebar, open **Manage accounts**, and under **Google accounts** enter the client ID and secret, then press **Save the Google app**. Once saved, it folds away; open it to change it, but changing the app means connecting each Google account again.
-
-On the **Configuration** tab you can change the daily check time, and optionally set **Daily notification** to a notify entity or service, such as `notify.mobile_app_my_phone` or an email notifier. After each daily check it sends a message when changes or decisions are waiting or an account couldn't be read, and nothing otherwise.
-
-### 4. Add each iCloud account
-
-Open **Contact Sync** in the sidebar and open **Manage accounts**. Under **iCloud accounts**, enter a label of your choice (shown on the page), the Apple ID, and its app-specific password, then press **Add an iCloud account**. Contact Sync signs in straight away, so a wrong Apple ID or password shows up at once. Repeat for each iCloud account. To change an account's password, add it again with the new one; **Remove** forgets an account and deletes what was saved from it.
-
-### 5. Connect each Google account
-
-Use a computer for this. The copy-and-paste step is awkward on a phone.
-
-1. Open **Contact Sync** in the sidebar, open **Manage accounts**, and press **Connect a Google account**.
-2. Open the sign-in link and choose the account. Google warns that it hasn't verified the app: choose **Advanced**, then **Go to Contact Sync**. The warning is normal for an app you made yourself.
-3. Allow access to contacts. If Google shows a checkbox for contacts, make sure it's ticked.
-4. The browser ends on a "This site can't be reached" page. That's expected. Copy the whole address from the address bar, paste it into Contact Sync, and press **Connect**.
-5. Repeat for each Google account.
-
-**Disconnect** forgets a Google account, deletes what was saved from it, and cancels its sign-in at Google.
-
-Then press **Check now**. Each account should show its contact count.
+Setup, from installing to adding each account, is in the [README](README.md). Then open **Contact Sync** in the sidebar and press **Check now**. Each account should show its contact count.
 
 ## Reviewing changes
 
@@ -105,7 +59,7 @@ When more than 10 contacts have gone from one account since the last apply, that
 
 ### Backups
 
-Before writing, Contact Sync saves a backup to `addon_configs/local_contact_sync/backups`. Each is a folder named for the date and time it was made, such as `2026-11-01_14-05-12`. Applying everyone backs up every account. Applying one person backs up only their cards, and the folder name ends with theirs, such as `2026-11-01_14-05-12 Jane Smith`. The last 10 of each kind are kept, so one-person backups never push out a backup of every account.
+Before writing, Contact Sync saves a backup to `contact_sync/backups` in Home Assistant's config folder. Each is a folder named for the date and time it was made, such as `2026-11-01_14-05-12`. Applying everyone backs up every account. Applying one person backs up only their cards, and the folder name ends with theirs, such as `2026-11-01_14-05-12 Jane Smith`. The last 10 of each kind are kept, so one-person backups never push out a backup of every account.
 
 Each folder holds:
 
@@ -151,9 +105,10 @@ Contact Sync syncs names, nicknames, companies, job titles, birthdays, notes, ph
 
 | What | Where |
 |---|---|
-| Daily check time and notification | The add-on's Configuration tab |
-| iCloud accounts and their app-specific passwords, the Google app's client ID and secret, Google sign-ins, last check results, your review decisions, the record of the last apply | The add-on's private storage |
-| Raw contact snapshots from the latest check | `addon_configs/local_contact_sync/snapshots` on the Samba share |
-| Backups made before each apply | `addon_configs/local_contact_sync/backups` on the Samba share |
+| Daily check time and notification | **Configure** on Contact Sync's entry under Devices & services |
+| iCloud accounts and their app-specific passwords, the Google app's client ID and secret, Google sign-ins | Contact Sync's entry in Home Assistant |
+| Last check results, your review decisions, the record of the last apply, photo thumbnails | `.storage/contact_sync` in Home Assistant's config folder |
+| Raw contact snapshots from the latest check | `contact_sync/snapshots` in the config folder |
+| Backups made before each apply | `contact_sync/backups` in the config folder |
 
-The snapshots and backups are kept under `addon_configs`, outside the add-on's own folder, so contact data can never end up in the add-on's code or on GitHub. Home Assistant gives every add-on a folder there for files you can open.
+All of it is in Home Assistant's config folder, outside `custom_components`, so contact data can never end up in Contact Sync's code or on GitHub, and Home Assistant's own backups include it. The snapshots and backups can be opened over the Samba share's `config` folder.
