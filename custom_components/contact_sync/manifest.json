@@ -1,0 +1,14 @@
+{
+  "domain": "contact_sync",
+  "name": "Contact Sync",
+  "codeowners": ["@lordexorr"],
+  "config_flow": true,
+  "dependencies": ["frontend", "http", "panel_custom", "websocket_api"],
+  "documentation": "https://github.com/lordexorr/contact-sync",
+  "integration_type": "service",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/lordexorr/contact-sync/issues",
+  "requirements": [],
+  "single_config_entry": true,
+  "version": "0.5.0b1"
+}

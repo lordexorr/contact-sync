@@ -10,7 +10,7 @@ from pathlib import Path
 import requests
 
 from . import base, people, photos, storage, vcard
-from .google import GoogleContacts, GoogleError, revoke
+from .google import GoogleContacts, GoogleError
 from .icloud import ICloudAddressBook, ICloudError
 from .settings import PRIVATE_DIR, SHARED_DIR
 
@@ -18,16 +18,15 @@ log = logging.getLogger(__name__)
 
 STATUS_FILE = PRIVATE_DIR / "status.json"
 RECORDS_FILE = PRIVATE_DIR / "records.json"
-GOOGLE_ACCOUNTS_FILE = PRIVATE_DIR / "google_accounts.json"
-ICLOUD_ACCOUNTS_FILE = PRIVATE_DIR / "icloud_accounts.json"
-GOOGLE_APP_FILE = PRIVATE_DIR / "google_app.json"
 SNAPSHOT_DIR = SHARED_DIR / "snapshots"
 
 check_lock = threading.Lock()  # one check, or one apply, at a time
-# Guards the account lists, the snapshots, status.json and records.json. It's only held for quick file work,
-# so adding or removing an account never waits for a check, and a check can still tell that an account was
-# removed while it was being read.
+# Guards the snapshots, status.json and records.json. It's only held for quick file work, so removing an account
+# never waits for a check, and a check can still tell that an account was removed while it was being read.
 _state_lock = threading.Lock()
+# The accounts set up in Home Assistant, which keeps them. Each change replaces a list whole, so a check reading
+# one sees it either before or after the change.
+_accounts = {"icloud": [], "google": [], "google_app": {"client_id": "", "client_secret": ""}}
 
 
 def load_status() -> dict | None:
@@ -35,40 +34,24 @@ def load_status() -> dict | None:
 
 
 def load_records() -> dict | None:
-    """Every contact from the latest check, in the add-on's own form, plus each account's groups."""
+    """Every contact from the latest check, in Contact Sync's own form, plus each account's groups."""
     return storage.read_json(RECORDS_FILE, None)
 
 
+def set_accounts(icloud: list[dict], google: list[dict], google_app: dict) -> None:
+    """The accounts as Home Assistant has them now. iCloud: {"label", "apple_id", "app_password"}; Google: {"email",
+    "refresh_token"}; google_app: the app registered in Google Cloud that every Google account signs in through."""
+    _accounts.update(icloud=list(icloud), google=list(google),
+                     google_app={"client_id": "", "client_secret": "", **google_app})
+
+
 def google_accounts() -> list[dict]:
-    return storage.read_json(GOOGLE_ACCOUNTS_FILE, [])
-
-
-def save_google_account(account: dict) -> None:
-    with _state_lock:
-        others = [a for a in google_accounts() if a["email"] != account["email"]]
-        storage.write_json(GOOGLE_ACCOUNTS_FILE, others + [account])
-
-
-def remove_google_account(email: str) -> None:
-    """Forget the account, delete what was saved from it, and cancel its sign-in at Google."""
-    with _state_lock:
-        accounts = google_accounts()
-        storage.write_json(GOOGLE_ACCOUNTS_FILE, [a for a in accounts if a["email"] != email])
-        _forget("google", email)
-    for account in accounts:
-        if account["email"] == email:
-            revoke(account["refresh_token"])
+    return _accounts["google"]
 
 
 def google_app() -> dict:
-    """The app registered in Google Cloud that every Google account signs in through:
-    {"client_id", "client_secret"}, both "" until it's set up."""
-    return {"client_id": "", "client_secret": "", **storage.read_json(GOOGLE_APP_FILE, {})}
-
-
-def save_google_app(client_id: str, client_secret: str) -> None:
-    with _state_lock:
-        storage.write_json(GOOGLE_APP_FILE, {"client_id": client_id, "client_secret": client_secret})
+    """{"client_id", "client_secret"}, both "" until it's set up."""
+    return _accounts["google_app"]
 
 
 def _google(refresh_token: str) -> GoogleContacts:
@@ -77,8 +60,7 @@ def _google(refresh_token: str) -> GoogleContacts:
 
 
 def icloud_accounts() -> list[dict]:
-    """Each iCloud account as {"label", "apple_id", "app_password"}."""
-    return storage.read_json(ICLOUD_ACCOUNTS_FILE, [])
+    return _accounts["icloud"]
 
 
 def test_icloud_account(account: dict) -> None:
@@ -87,24 +69,18 @@ def test_icloud_account(account: dict) -> None:
         book.fetch([])
 
 
-def save_icloud_account(account: dict) -> None:
-    """Add the account, or update the label and password of the one with the same Apple ID. That one keeps
-    its Apple ID as first typed, which is what everything saved from it is filed under."""
-    with _state_lock:
-        accounts = icloud_accounts()
-        at = next((i for i, a in enumerate(accounts) if a["apple_id"].lower() == account["apple_id"].lower()), None)
-        if at is None:
-            accounts.append(account)
-        else:
-            accounts[at] = {**account, "apple_id": accounts[at]["apple_id"]}
-        storage.write_json(ICLOUD_ACCOUNTS_FILE, accounts)
+def saved_accounts() -> set[str]:
+    """The accounts anything is saved from, as "icloud:<Apple ID>" or "google:<email>"."""
+    status = load_status() or {}
+    return ({f"{r['service'].lower()}:{r['login']}" for r in status.get("accounts", [])}
+            | {a["key"] for a in (load_records() or {}).get("accounts", [])})
 
 
-def remove_icloud_account(apple_id: str) -> None:
-    """Forget the account and delete what was saved from it."""
+def forget(key: str) -> None:
+    """Delete everything saved from an account that's been removed: "icloud:<Apple ID>" or "google:<email>"."""
+    service, _, login = key.partition(":")
     with _state_lock:
-        storage.write_json(ICLOUD_ACCOUNTS_FILE, [a for a in icloud_accounts() if a["apple_id"] != apple_id])
-        _forget("icloud", apple_id)
+        _forget(service, login)
 
 
 def _forget(service: str, login: str) -> None:
@@ -284,8 +260,8 @@ def _check_icloud(account: dict, run: _Run) -> dict:
     row = _result("iCloud", account["label"] or "iCloud", account["apple_id"])
     key = f"icloud:{account['apple_id']}"
     if not account["apple_id"] or not account["app_password"]:
-        row["error"] = ("Apple ID or app-specific password missing. Add the account again under Manage accounts "
-                        "on the Contact Sync page.")
+        row["error"] = ("Apple ID or app-specific password missing. Reconfigure the account in Contact Sync's "
+                        "settings in Home Assistant.")
     else:
         try:
             with ICloudAddressBook(account["apple_id"], account["app_password"]) as book:
@@ -341,7 +317,7 @@ def _describe(err: Exception, service: str) -> str:
     if isinstance(err, requests.RequestException):
         return f"Couldn't reach {service}: {err}"
     log.exception("Unexpected error while reading %s", service)
-    return f"Unexpected error ({type(err).__name__}: {err}). Details are in the add-on's log."
+    return f"Unexpected error ({type(err).__name__}: {err}). Details are in Home Assistant's log."
 
 
 def _snapshot_path(name: str) -> Path:

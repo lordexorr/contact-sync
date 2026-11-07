@@ -1,0 +1,124 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Contact Sync",
+        "description": "Keeps contacts in sync across iCloud and Google accounts, as one combined list. Every change is shown for review on Contact Sync's page in the sidebar, and nothing is written to any account until you apply it.\n\nOnce this is added, add each account from Contact Sync's entry under Devices & services: **Add iCloud account** or **Add Google account**."
+      },
+      "reconfigure": {
+        "title": "Google app",
+        "description": "The app registered in your Google Cloud project, which every Google account signs in through. Its sign-ins belong to the app, so after changing it, remove each Google account and add it again.",
+        "data": {
+          "client_id": "Client ID",
+          "client_secret": "Client secret"
+        }
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Contact Sync is already set up.",
+      "reconfigure_successful": "Saved the Google app."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Contact Sync",
+        "data": {
+          "daily_check_time": "Daily check time",
+          "notify": "Daily notification"
+        },
+        "data_description": {
+          "daily_check_time": "When every account is checked each day, in Home Assistant's time zone.",
+          "notify": "A notify entity or action, such as notify.mobile_app_my_phone, told after the daily check when changes are waiting or an account couldn't be read. Leave empty for none."
+        }
+      }
+    },
+    "error": {
+      "notify_unknown": "That isn't a notify entity or action in Home Assistant."
+    }
+  },
+  "config_subentries": {
+    "icloud": {
+      "initiate_flow": {
+        "user": "Add iCloud account",
+        "reconfigure": "Change label or password"
+      },
+      "entry_type": "iCloud account",
+      "step": {
+        "user": {
+          "title": "iCloud account",
+          "description": "Contact Sync signs in to iCloud with an app-specific password. Create one at account.apple.com, under Sign-In and Security → App-Specific Passwords.",
+          "data": {
+            "label": "Label",
+            "apple_id": "Apple ID",
+            "app_password": "App-specific password"
+          },
+          "data_description": {
+            "label": "Any name you like, shown on Contact Sync's page."
+          }
+        },
+        "reconfigure": {
+          "title": "iCloud account",
+          "description": "A new app-specific password replaces the old one. The Apple ID stays the same.",
+          "data": {
+            "label": "Label",
+            "app_password": "App-specific password"
+          }
+        }
+      },
+      "error": {
+        "refused": "Couldn't add the account: {error}",
+        "cannot_connect": "Couldn't reach iCloud: {error}"
+      },
+      "abort": {
+        "already_configured": "That Apple ID is already added.",
+        "reconfigure_successful": "Saved."
+      }
+    },
+    "google": {
+      "initiate_flow": {
+        "user": "Add Google account"
+      },
+      "entry_type": "Google account",
+      "step": {
+        "app": {
+          "title": "Google app",
+          "description": "Google accounts sign in through an app you register in your own Google Cloud project, once for every Google account. Contact Sync's README shows how. Enter its client ID and secret here.",
+          "data": {
+            "client_id": "Client ID",
+            "client_secret": "Client secret"
+          }
+        },
+        "sign_in": {
+          "title": "Google account",
+          "description": "1. [Open Google sign-in]({url}) and choose the account. If Google says it hasn't verified the app, choose **Advanced**, then **Go to Contact Sync**.\n2. Allow access to contacts. If Google shows a checkbox for contacts, tick it. The browser then shows a \"This site can't be reached\" page. That's expected.\n3. Copy the whole address from the browser's address bar and paste it here.",
+          "data": {
+            "url": "Address from the browser"
+          }
+        }
+      },
+      "error": {
+        "refused": "{error}",
+        "cannot_connect": "Couldn't reach Google: {error}"
+      },
+      "abort": {
+        "already_configured": "That Google account is already added."
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "changes_waiting": {
+        "name": "Changes Waiting"
+      },
+      "last_check": {
+        "name": "Last Check"
+      }
+    },
+    "button": {
+      "check_now": {
+        "name": "Check Now"
+      }
+    }
+  }
+}

@@ -190,7 +190,7 @@ def _photo(raw: str) -> tuple[str, object] | None:
 
 
 # --- Writing ---
-# Only the lines a change touches are rewritten. Every other line, including ones this add-on doesn't read,
+# Only the lines a change touches are rewritten. Every other line, including ones Contact Sync doesn't read,
 # goes back to iCloud as it came.
 
 PRODID = "PRODID:-//Contact Sync//EN"

@@ -219,8 +219,8 @@ class GoogleContacts:
                 if any(code in resp.text for code in RECONNECT_ERRORS):
                     raise GoogleError(
                         f"Google no longer accepts this sign-in ({_error_text(resp)}). It expired or was revoked, "
-                        "or the Google client ID or secret changed. Check those under Manage accounts on the "
-                        "Contact Sync page, then disconnect the account and connect it again."
+                        "or the Google client ID or secret changed. Check those in Contact Sync's settings in "
+                        "Home Assistant, then remove the account and add it again."
                     )
                 raise GoogleError(f"Google refused to refresh the sign-in: {_error_text(resp)}")
             data = resp.json()

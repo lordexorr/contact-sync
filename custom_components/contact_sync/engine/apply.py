@@ -68,7 +68,7 @@ def run(options: dict, person: str | None, token: str, tz, progress: Progress) -
         log.exception("Apply failed")
         result["status"] = "failed"
         result["message"] = (f"Apply stopped with an unexpected error ({type(err).__name__}: {err}). Any changes "
-                             "listed below were made before it stopped. Details are in the add-on's log.")
+                             "listed below were made before it stopped. Details are in Home Assistant's log.")
     finally:
         result["finished_at"] = _now()
         storage.write_json(RESULT_FILE, result)
@@ -362,7 +362,7 @@ class _Writer:
             error = f"Couldn't reach {'iCloud' if account.startswith('icloud:') else 'Google'}: {err}"
         except Exception as err:  # one change failing mustn't stop the rest
             log.exception("Couldn't make a change")
-            error = f"Unexpected error ({type(err).__name__}: {err}). Details are in the add-on's log."
+            error = f"Unexpected error ({type(err).__name__}: {err}). Details are in Home Assistant's log."
         if error and person:
             self.failed.add(person)
         warning, self._warning = self._warning, ""

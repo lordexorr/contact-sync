@@ -1,4 +1,4 @@
-"""Contacts as the add-on sees them, whichever account they came from."""
+"""Contacts as Contact Sync sees them, whichever account they came from."""
 import re
 import unicodedata
 from dataclasses import asdict, dataclass, field
