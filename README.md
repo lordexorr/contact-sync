@@ -12,14 +12,27 @@ iCloud is read and written over CardDAV, with an app-specific password for each 
 
 ## What it syncs
 
-Names, nicknames, companies, job titles, birthdays, notes, photos, phone numbers, email addresses, postal addresses, websites, related names, dates such as anniversaries, and groups (iCloud lists and Google labels), with their labels and order. Every account ends up with exactly the same text, so a sync also tidies how things are written:
+Every account ends up with exactly the same text. Capitals and punctuation count, so when two accounts write something differently, the review asks which way every account should write it. Stray spaces are removed without asking.
 
-- US phone numbers are written as **(555) 555-0123**, with an extension as " x12". Other countries' numbers stay as they are.
-- A US country is taken off addresses. Other countries stay.
-- Each value keeps the label most accounts give it, and every list is in the same order, with the main value first.
-- Something deleted from one account since the last sync is deleted from the others, instead of being copied back.
+| Detail | How every account ends up |
+|---|---|
+| Name | The same name, in its parts: prefix, first, middle, last and suffix. A sync changes a name but never removes one. |
+| Nickname, company, job title | One of each, written the same everywhere. Further companies and locations that only Google can hold are decided in the review. |
+| Birthday | The same day. A birthday with a year and one without count as the same, and the year is kept. Two different years on the same day are asked about. |
+| Notes | In full, with their line breaks. |
+| Photo | The same picture. Photos are compared by what they show, so the same picture saved at another size or quality still counts as the same. It's copied at full size. |
+| Phone numbers | US numbers as **(555) 555-0123**, whether they came with +1 or a leading 1, with dots or dashes, or as ten digits with no spacing. An extension stays on the end, as "(555) 555-0123 x12". Other countries' numbers, short numbers and numbers with letters in them stay as they are. |
+| Email addresses | Compared without capitals, and written the same everywhere. |
+| Addresses | **A US country is removed**: US, USA, U.S.A., United States or United States of America. An address with nothing else on it keeps it, and other countries stay. The same street and ZIP count as one address however they're written, so "Street" and "St", "North" and "N", "Apartment" and "Apt", or "NY" and "New York" are one address written two ways, and the review asks which wording to keep. |
+| Websites | Compared without `http://` or `https://`, `www.`, capitals or a trailing slash. |
+| Related names | Compared without capitals or punctuation. |
+| Dates, such as an anniversary | Compared by day and month, so one with a year and one without are the same date. |
+| Labels | Each phone number, email, address, website, related name and date keeps the label most accounts give it, such as mobile or work, preferring one changed since the last sync. The labels offered are the ones iCloud and Google both have, and **Custom…** types any other, which both keep as typed. Labels other sync tools leave behind, such as "PREF", "X-Personal" or "Email", count as no label, and one typed as "Fax" becomes other fax. |
+| Order | A contact's phone numbers are listed in the same order in every account, and so are their emails, addresses, websites, related names and dates. The first in each list is the main one: Google marks it as primary and iCloud as preferred. |
+| Groups | iCloud lists and Google labels, matched by name. A group is created in any account that lacks it, and someone taken out of a group in one account is taken out everywhere. Contacts that are only in a label are added to Google's **My Contacts**, so Google Contacts lists and counts them. |
+| Show as company | iCloud's setting for showing a card as a company, kept the same between iCloud accounts. |
 
-Social profiles, messaging handles and details only one service has stay in each account as they are. [DOCS.md](DOCS.md#what-syncs-and-how-its-written) has every rule, detail by detail.
+Delete a contact, or a detail such as a phone number, in any one account, for example on your iPhone, and the review offers to delete it from the other accounts too. Social profiles, messaging handles and details only one service has stay in each account as they are. [DOCS.md](DOCS.md) covers how contacts are matched, the review, and everything that isn't synced.
 
 ## Install
 

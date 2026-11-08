@@ -6,7 +6,7 @@ Setup, from installing to adding each account, is in the [README](README.md). Th
 
 ## What syncs, and how it's written
 
-Every account ends up with literally the same text. Capitals and punctuation count, so when two accounts write a value differently, the review asks which way every account should write it. Stray spaces are removed without asking.
+Every account ends up with literally the same text. Capitals and punctuation count, so when two accounts write something differently, the review asks which way every account should write it. Stray spaces are removed without asking.
 
 | Detail | How every account ends up |
 |---|---|
@@ -21,8 +21,8 @@ Every account ends up with literally the same text. Capitals and punctuation cou
 | Websites | Compared without `http://` or `https://`, `www.`, capitals or a trailing slash. |
 | Related names | Compared without capitals or punctuation. |
 | Dates, such as an anniversary | Compared by day and month, so one with a year and one without are the same date. |
-| Labels | Each value takes the label most accounts give it, preferring one changed since the last sync. The dropdowns offer the labels iCloud and Google both have: mobile, home, work, main, home fax, work fax, pager and other for phone numbers; home, work and other for emails and addresses; homepage, home, work and other for websites; spouse, partner, child, mother, father, parent, brother, sister, friend, assistant and manager for related names; anniversary and other for dates. **Custom…** types any other label, which both keep as typed, and a label only one service has, such as iPhone, stays on offer. Labels other sync tools leave behind, such as "PREF", "X-Personal" or "Email", count as no label, and a label typed as "Fax" becomes other fax. |
-| Order | Every list of phone numbers, emails, addresses, websites, related names or dates in the same order. The first value is the main one, and Google's primary mark and iCloud's preferred mark go on it. |
+| Labels | Each phone number, email, address, website, related name and date keeps the label most accounts give it, such as mobile or work, preferring one changed since the last sync. The dropdowns offer the labels iCloud and Google both have: mobile, home, work, main, home fax, work fax, pager and other for phone numbers; home, work and other for emails and addresses; homepage, home, work and other for websites; spouse, partner, child, mother, father, parent, brother, sister, friend, assistant and manager for related names; anniversary and other for dates. **Custom…** types any other label, which both keep as typed, and a label only one service has, such as iPhone, stays on offer. Labels other sync tools leave behind, such as "PREF", "X-Personal" or "Email", count as no label, and a label typed as "Fax" becomes other fax. |
+| Order | A contact's phone numbers are listed in the same order in every account, and so are their emails, addresses, websites, related names and dates. The first in each list is the main one: Google marks it as primary and iCloud as preferred. |
 | Groups | iCloud lists and Google labels, matched by name. A group is created in any account that lacks it, and someone taken out of a group in one account is taken out everywhere, but a group is deleted only when an account deletes it. Contacts that are only in a label are added to Google's **My Contacts**, so Google Contacts lists and counts them. |
 | Show as company | iCloud's setting for showing a card as a company, kept the same between iCloud accounts. Google has no such setting. |
 
