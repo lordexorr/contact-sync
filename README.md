@@ -10,14 +10,27 @@ A Home Assistant integration that keeps contacts in sync across any number of iC
 
 iCloud is read and written over CardDAV, with an app-specific password for each Apple ID. Google is read and written through the Google People API, with an OAuth client you register in your own Google Cloud project, and each Google account signs in on Google's own page. Everything runs on your Home Assistant machine, and only administrators see Contact Sync's page.
 
+## What it syncs
+
+Names, nicknames, companies, job titles, birthdays, notes, photos, phone numbers, email addresses, postal addresses, websites, related names, dates such as anniversaries, and groups (iCloud lists and Google labels), with their labels and order. Every account ends up with exactly the same text, so a sync also tidies how things are written:
+
+- US phone numbers are written as **(555) 555-0123**, with an extension as " x12". Other countries' numbers stay as they are.
+- A US country is taken off addresses. Other countries stay.
+- Each value keeps the label most accounts give it, and every list is in the same order, with the main value first.
+- Something deleted from one account since the last sync is deleted from the others, instead of being copied back.
+
+Social profiles, messaging handles and details only one service has stay in each account as they are. [DOCS.md](DOCS.md#what-syncs-and-how-its-written) has every rule, detail by detail.
+
 ## Install
 
-Contact Sync needs Home Assistant 2026.11 or later.
+Contact Sync needs Home Assistant 2026.11 or later, and is installed through its Marketplace.
 
-1. In HACS, open the **⋮** menu, choose **Custom repositories**, and add `https://github.com/lordexorr/contact-sync` as an **Integration**.
-2. Open **Contact Sync** in HACS and download it. While Contact Sync is in testing its releases are betas, which HACS lists once beta versions are shown for the repository.
+1. In the **Marketplace**, choose **Add from a GitHub link** and enter `https://github.com/lordexorr/contact-sync`, as an **Integration** if it asks.
+2. Open **Contact Sync** in the Marketplace and download it.
 3. Restart Home Assistant.
 4. Go to **Settings → Devices & services → Add integration** and choose **Contact Sync**.
+
+The Marketplace offers each new version as an update. It looks for new versions of what was added from a GitHub link only every day or two, so to see one straight away, choose **⋮ → Refresh information** on Contact Sync's page there.
 
 ## Setup
 
@@ -62,7 +75,9 @@ Then open **Contact Sync** in the sidebar and press **Check now**. Each account 
 
 ## Using it
 
-[DOCS.md](DOCS.md) covers the review, applying, backups and undoing a change, the Contacts pages, and what isn't synced.
+Contact Sync's page in the sidebar shows each account's contact count and the review in brief, with **Check now**. **Open the review** lists every change a sync would make and everything there is to decide, such as possible matches and values that differ between accounts. **Apply changes…** then shows what changes in each account, and makes the changes after backing every account up. **Contacts** finds anyone, and edits, adds or deletes a contact for every account through the same Apply page.
+
+[DOCS.md](DOCS.md) covers what syncs and how it's written, how contacts are matched, the review, applying, backups and undoing a change, the Contacts pages, and what isn't synced.
 
 ## Entities
 
@@ -76,7 +91,7 @@ On the Contact Sync device. Home Assistant chooses their entity IDs from the dev
 
 ## Removing
 
-Delete Contact Sync under **Settings → Devices & services**. That deletes what it keeps about everyone's contacts, in `.storage/contact_sync` and `contact_sync/snapshots` in the config folder, and cancels each Google account's sign-in at Google. The backups made before each apply stay in `contact_sync/backups`: delete that folder too once you no longer want them. Then remove Contact Sync in HACS and restart Home Assistant. The Google app in your Google Cloud project and the app-specific passwords at account.apple.com stay until you delete them there.
+Delete Contact Sync under **Settings → Devices & services**. That deletes what it keeps about everyone's contacts, in `.storage/contact_sync` and `contact_sync/snapshots` in the config folder, and cancels each Google account's sign-in at Google. The backups made before each apply stay in `contact_sync/backups`: delete that folder too once you no longer want them. Then remove Contact Sync in the Marketplace and restart Home Assistant. The Google app in your Google Cloud project and the app-specific passwords at account.apple.com stay until you delete them there.
 
 ## Changes
 

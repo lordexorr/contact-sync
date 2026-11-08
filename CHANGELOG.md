@@ -1,26 +1,18 @@
 # Changelog
 
-## 0.5.0b2
+## 0.5.0
 
-- **Deletions after the move:** once a check finds every account in sync and nothing has been recorded yet, as just after moving from the add-on, what each account holds is recorded, the same record an apply makes. A contact or detail deleted from one account after that is deleted from the others, instead of being offered back.
-- **Sign in again** on a Google account, for when Google stops accepting its sign-in. Everything saved from the account stays. After changing the Google app, sign each Google account in again the same way.
-- **Repairs:** an account a check couldn't read is listed under **Settings → Repairs**, with what to do, until a check reads it.
-- **The review:** after answering a possible match, a duplicate or **No group**, the next one's buttons work without reloading the page, and a choice that couldn't be saved goes back to what's saved.
-- **Removing Contact Sync** deletes what it keeps about everyone's contacts and cancels each Google sign-in. The backups stay.
-- Contact Sync's device page links to its page in the sidebar and shows the version installed, and its diagnostics can be downloaded, with passwords, sign-ins, names and email addresses taken out.
-- Pages that follow a check or an apply refresh every 5 seconds, and the result page no longer puts the whole review together each time. Starting Home Assistant no longer waits for the review.
-- Changing the Google app keeps working in Home Assistant 2026.12.
-- The README lists the entities by name, since their IDs are Home Assistant's choice.
-
-## 0.5.0b1
-
-Contact Sync is now a Home Assistant integration, installed through HACS, instead of an add-on. It does everything it did before, on its page in the sidebar. This is a test version.
+Contact Sync is now a Home Assistant integration, installed through the Marketplace, instead of an add-on. It does everything it did before, on its page in the sidebar.
 
 - **Setup is in Home Assistant:** add Contact Sync under Devices & services, then each account with **Add iCloud account** or **Add Google account**. **Configure** sets the daily check time and notification, and **Reconfigure** changes the Google app. Accounts don't carry over from the add-on: add each one again.
+- **Sign in again** on a Google account, for when Google stops accepting its sign-in, keeps everything saved from the account.
+- **Deletions after the move:** once a check finds every account in sync and nothing has been recorded yet, as just after moving from the add-on, what each account holds is recorded, the same record an apply makes. A contact or detail deleted from one account after that is deleted from the others, instead of being offered back.
 - **The page** is rebuilt as a panel in Home Assistant's sidebar, in your theme's colours, for administrators only. Choices in the review save without reloading the page.
-- **Entities** for automations and dashboards: **Changes Waiting**, with what's still to decide in its attributes; **Last Check**, with any account that couldn't be read; and a **Check Now** button.
-- Snapshots and backups are in `contact_sync` in Home Assistant's config folder, and everything else Contact Sync keeps is in `.storage/contact_sync`. Home Assistant's backups include both.
-- Photo fingerprints use the newer Pillow call, so Home Assistant logs no warning about it.
+- **Entities** for automations and dashboards: **Changes Waiting**, with what's still to decide in its attributes; **Last Check**, with any account that couldn't be read; and a **Check Now** button. Contact Sync's device page links to its page in the sidebar.
+- **Repairs:** an account a check couldn't read is listed under **Settings → Repairs**, with what to do, until a check reads it.
+- **Diagnostics** can be downloaded from Contact Sync's entry, with passwords, sign-ins, names and email addresses taken out.
+- Snapshots and backups are in `contact_sync` in Home Assistant's config folder, and everything else Contact Sync keeps is in `.storage/contact_sync`. Home Assistant's backups include both. Removing Contact Sync deletes what it keeps about everyone's contacts, apart from the backups, and cancels each Google sign-in.
+- **The README and DOCS.md** say what syncs and how each detail is written, including the US phone format, taking the US country off addresses, labels, order and groups, and how contacts are matched.
 
 ## 0.4.4
 

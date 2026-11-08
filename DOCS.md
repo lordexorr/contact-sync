@@ -1,8 +1,36 @@
 # Contact Sync
 
-Keeps contacts in sync across any number of iCloud and Google accounts, as one combined list. It checks once a day and whenever you press **Check now**, and writes nothing to any account until you review the changes and apply them yourself. Each apply makes a backup before anything is written.
+Keeps contacts in sync across any number of iCloud and Google accounts, as one combined list. It checks every account once a day, and whenever you press **Check now** on its page or the **Check Now** button, and writes nothing to any account until you review the changes and apply them yourself. Each apply makes a backup before anything is written.
 
 Setup, from installing to adding each account, is in the [README](README.md). Then open **Contact Sync** in the sidebar and press **Check now**. Each account should show its contact count.
+
+## What syncs, and how it's written
+
+Every account ends up with literally the same text. Capitals and punctuation count, so when two accounts write a value differently, the review asks which way every account should write it. Stray spaces are removed without asking.
+
+| Detail | How every account ends up |
+|---|---|
+| Name | The same name, in its parts: prefix, first, middle, last and suffix. A sync changes a name but never removes one. |
+| Nickname, company, job title | One of each, written the same everywhere. Further companies and locations that only Google can hold are decided under **Details only Google can hold**. |
+| Birthday | The same day. A birthday with a year and one without count as the same, and the year is kept. Two different years on the same day are asked about. |
+| Notes | In full, with their line breaks. |
+| Photo | The same picture. Photos are compared by what they show, so the same picture saved at another size or quality still counts as the same. It's copied at full size. Photos are changed in an account, such as on an iPhone, not on the Contacts pages. |
+| Phone numbers | US numbers as **(555) 555-0123**, whether they came with +1 or a leading 1, with dots or dashes, or as ten digits with no spacing. An extension stays on the end, as "(555) 555-0123 x12". Other countries' numbers, short numbers and numbers with letters in them stay as they are. |
+| Email addresses | Compared without capitals, and written the same everywhere. |
+| Addresses | **A US country is removed**: US, USA, U.S.A., United States or United States of America. An address with nothing else on it keeps it, so it isn't left empty, and other countries stay. The same street and ZIP count as one address however they're written, so "Street" and "St", "North" and "N", "Apartment" and "Apt", or "NY" and "New York" are one address written two ways, and the review asks which wording to keep. |
+| Websites | Compared without `http://` or `https://`, `www.`, capitals or a trailing slash. |
+| Related names | Compared without capitals or punctuation. |
+| Dates, such as an anniversary | Compared by day and month, so one with a year and one without are the same date. |
+| Labels | Each value takes the label most accounts give it, preferring one changed since the last sync. The dropdowns offer the labels iCloud and Google both have: mobile, home, work, main, home fax, work fax, pager and other for phone numbers; home, work and other for emails and addresses; homepage, home, work and other for websites; spouse, partner, child, mother, father, parent, brother, sister, friend, assistant and manager for related names; anniversary and other for dates. **Custom…** types any other label, which both keep as typed, and a label only one service has, such as iPhone, stays on offer. Labels other sync tools leave behind, such as "PREF", "X-Personal" or "Email", count as no label, and a label typed as "Fax" becomes other fax. |
+| Order | Every list of phone numbers, emails, addresses, websites, related names or dates in the same order. The first value is the main one, and Google's primary mark and iCloud's preferred mark go on it. |
+| Groups | iCloud lists and Google labels, matched by name. A group is created in any account that lacks it, and someone taken out of a group in one account is taken out everywhere, but a group is deleted only when an account deletes it. Contacts that are only in a label are added to Google's **My Contacts**, so Google Contacts lists and counts them. |
+| Show as company | iCloud's setting for showing a card as a company, kept the same between iCloud accounts. Google has no such setting. |
+
+What isn't synced is listed [further down](#what-isnt-synced).
+
+## How contacts are matched
+
+Contacts are matched automatically when they share a phone number or email address, their names agree and their birthdays don't differ, or when they have the same name in different accounts and nothing contradicts it. A first or last name on its own counts, and a card with no name goes by its company, so a business entered as a first name in one account and as the company in another still matches. Contacts that were one person at the last apply stay matched, even after a name or number changes in one account. Matching ignores capitals, punctuation and how a number or address is written, so those differences never split a person in two. A phone number or email shared by more than 12 contacts, such as a company's switchboard, says nothing about who's who, so it isn't used for matching. Nothing joins two people you said are different, even through a third contact. Anything else that looks alike is asked about under **Possible matches**. Being matched only means the copies are the same person: every difference between them still appears under **Changes**.
 
 ## Reviewing changes
 
@@ -24,7 +52,7 @@ After each check, the **Review** section just below **Check now** counts what a 
 - **Duplicates within one account:** the same person more than once in one account, with every card shown side by side. **Merge into one** keeps the card with the most details, moves everything from the other cards onto it (including details Contact Sync doesn't otherwise use, such as social profiles and messaging handles), and deletes the others when you apply. The person's table then has a **Duplicate cards** row, which you can untick. **Keep both** leaves them as they are. Either choice moves the card to a collapsed **Decided** section, where you can switch. Until you choose, applying leaves the extra cards alone. A same-name pair in one account first appears under **Possible matches**; answering **Same person** brings it here.
 - **Start over** forgets every match, choice and skip, once you confirm it.
 
-Contacts are matched automatically when they share a phone number or email address, their names agree and their birthdays don't differ, or when they have the same name in different accounts and nothing contradicts it. A first or last name on its own counts, and a card with no name goes by its company, so a business entered as a first name in one account and as the company in another still matches. Contacts that were one person at the last apply stay matched, even after a name or number changes in one account. Matching ignores capitals, punctuation and how a number or address is written, so those differences never split a person in two. Being matched only means the copies are the same person: every difference between them still appears under **Changes**. Everything you choose is saved the moment you click it, and kept for later checks until the accounts no longer differ on it, when it's forgotten so it can't undo a later edit.
+Everything you choose is saved the moment you click it, and kept for later checks until the accounts no longer differ on it, when it's forgotten so it can't undo a later edit.
 
 ## Applying changes
 
@@ -36,6 +64,8 @@ Press **Apply changes…** at the bottom of the review to apply every ticked cha
 4. Checks again and records what every account now holds.
 
 Applying one person is quicker: it reads, backs up and rechecks only that person's cards, plus the groups, instead of every contact. It stops only if something about that person changed. Everyone else in the review stays as the latest check found them.
+
+Google takes changes one at a time, so Contact Sync sends them about a second apart, and waits between 30 seconds and 2 minutes whenever Google asks it to slow down. An apply with many changes to Google can take several minutes. The results page follows along, and leaving it doesn't stop anything.
 
 The results page lists every change made and every one that wasn't, with the reason. A person with a failed change stays in the review, so applying again retries it. A change that was made but has something to check is flagged in a **Check** column: for example, an iCloud card saved with its photo left as it was, because the photo couldn't be downloaded. The Contact Sync page shows when changes were last applied, with a link back to these results.
 
@@ -53,7 +83,7 @@ The record made after each apply is what lets later reviews tell a deletion from
 - A cleared nickname, company, job title, birthday, note or photo shows as removed from every account. A name is never removed.
 - A group deleted from one account, or a person taken out of a group, is deleted from or taken out of the group in the other accounts.
 
-Until the first apply, nothing counts as deleted.
+Until there's a record, nothing counts as deleted. The first apply makes one, and so does the first check that finds every account in sync with nothing recorded yet, such as just after setting Contact Sync up again.
 
 When more than 10 contacts have gone from one account since the last apply, that looks more like a glitch or a mistake than tidying up. The review shows a warning, and deleting those contacts from the other accounts starts unticked, so nothing goes until you tick each one. Applying without ticking them leaves them as they are, the same as unticking a **Contact** row above, and the results page says how many.
 
@@ -100,6 +130,13 @@ Contact Sync syncs names, nicknames, companies, job titles, birthdays, notes, ph
 - **Google's Other contacts,** the people Google saves by itself from your email. Contact Sync doesn't read them.
 - **Details from someone's own Google profile,** which Google can show on your contact. Only what's saved on the contact itself is read.
 - **Apple's hidden country code on an address.** Removing a US country takes it out of the address, but an iPhone's edit screen can still show the country. It doesn't show when you're just viewing the contact.
+
+## In Home Assistant
+
+- **Check Now** (a button), and **Changes Waiting** and **Last Check** (sensors), are on the Contact Sync device, for automations and dashboards. Changes Waiting's attributes count what's still to decide in the review, and Last Check's `accounts_not_read` lists any account it couldn't read. The device's page links to Contact Sync's page.
+- The daily check runs at the time set under **Configure** on Contact Sync's entry. The **Daily notification** set there says when changes or decisions are waiting or an account couldn't be read, and nothing otherwise.
+- When a check can't read an account, **Settings → Repairs** says which and why, until a check reads it. If its password or sign-in changed, choose **Change label or password** on the iCloud account, or **Sign in again** on the Google account. Everything saved from the account stays.
+- **Download diagnostics** on Contact Sync's entry gives what's needed to look into a problem, with passwords, sign-ins, names and email addresses taken out.
 
 ## Where things are kept
 
