@@ -178,6 +178,23 @@ def _record_result(options: dict, person: str | None, before: dict, writer: "_Wr
     return len(left)
 
 
+def record_start(options: dict) -> bool:
+    """With nothing recorded yet, such as when Contact Sync has just been set up again, record what every account
+    holds once a check finds them all in sync, the same record an apply makes. Without it a contact deleted from one
+    account would be offered back to it, instead of being deleted from the others. Nothing is recorded while an
+    account can't be read or anything is waiting in the review. True if it recorded."""
+    if base.load():
+        return False
+    loaded = review.current_records(options)
+    rv = review.current_plan(options)
+    if not loaded or not rv or rv["unread"] or any(rv["counts"].values()):
+        return False
+    contacts, accounts = loaded
+    base.record(contacts, rv["clusters"], {c.ref for c in contacts}, accounts, True, set())
+    log.info("Every account matches, so what each holds is recorded as the starting point for telling deletions apart")
+    return True
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 

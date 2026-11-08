@@ -50,7 +50,9 @@ Go to **Settings → Devices & services → Contact Sync**.
 - **Add iCloud account:** a label of your choice (shown on Contact Sync's page), the Apple ID, and its app-specific password. Contact Sync signs in straight away, so a wrong Apple ID or password shows up at once.
 - **Add Google account:** use a computer, since the copy-and-paste step is awkward on a phone. The first time, enter the Google app's client ID and secret. Then open the sign-in link and choose the account. Google warns that it hasn't verified the app: choose **Advanced**, then **Go to Contact Sync**, which is normal for an app you made yourself. Allow access to contacts, and if Google shows a checkbox for contacts, tick it. The browser ends on a "This site can't be reached" page. That's expected: copy the whole address from the address bar and paste it in.
 
-Deleting an account deletes what was saved from it, and for a Google account cancels its sign-in at Google. To use a different Google app, choose **Reconfigure** on Contact Sync's entry; each Google account then needs adding again, because its sign-in belongs to the app.
+If Google stops accepting an account's sign-in, choose **Sign in again** on that account; everything saved from it stays. Deleting an account deletes what was saved from it, and for a Google account cancels its sign-in at Google. To use a different Google app, choose **Reconfigure** on Contact Sync's entry, then **Sign in again** on each Google account, because its sign-in belongs to the app.
+
+When a check can't read an account, **Settings → Repairs** says which and why, until a check reads it again.
 
 ### 4. Options
 
@@ -64,11 +66,17 @@ Then open **Contact Sync** in the sidebar and press **Check now**. Each account 
 
 ## Entities
 
+On the Contact Sync device. Home Assistant chooses their entity IDs from the device's name, and sometimes its area.
+
 | Entity | |
 |---|---|
-| `sensor.contact_sync_changes_waiting` | The changes a sync would make. Its attributes count what's still to decide in the review: possible matches, values to choose, duplicates, extra details and contacts without a group. |
-| `sensor.contact_sync_last_check` | When every account was last read. `accounts_not_read` lists any that couldn't be. |
-| `button.contact_sync_check_now` | Checks every account now. |
+| **Changes Waiting** (sensor) | The changes a sync would make. Its attributes count what's still to decide in the review: possible matches, values to choose, duplicates, extra details and contacts without a group. |
+| **Last Check** (sensor) | When every account was last read. `accounts_not_read` lists any that couldn't be. |
+| **Check Now** (button) | Checks every account now. |
+
+## Removing
+
+Delete Contact Sync under **Settings → Devices & services**. That deletes what it keeps about everyone's contacts, in `.storage/contact_sync` and `contact_sync/snapshots` in the config folder, and cancels each Google account's sign-in at Google. The backups made before each apply stay in `contact_sync/backups`: delete that folder too once you no longer want them. Then remove Contact Sync in HACS and restart Home Assistant. The Google app in your Google Cloud project and the app-specific passwords at account.apple.com stay until you delete them there.
 
 ## Changes
 

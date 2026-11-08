@@ -73,14 +73,14 @@ class ContactSyncPanel extends LitElement {
     const path = location.pathname.slice(BASE.length).replace(/\/$/, "") || "/";
     const person = new URLSearchParams(location.search).get("person") || "";
     const pages = {
-      "/": ["home", { type: "contact_sync/home" }, 3000],
+      "/": ["home", { type: "contact_sync/home" }, 5000],
       "/review": ["review", { type: "contact_sync/review" }],
       "/contacts": ["contacts", { type: "contact_sync/contacts" }],
       "/contact": ["contact", { type: "contact_sync/contact", person }],
       "/edit": ["form", { type: "contact_sync/form", person }],
       "/new": ["form", { type: "contact_sync/form" }],
-      "/apply": ["apply", { type: "contact_sync/apply_page", person }, 3000],
-      "/result": ["result", { type: "contact_sync/result" }, 2000],
+      "/apply": ["apply", { type: "contact_sync/apply_page", person }, 5000],
+      "/result": ["result", { type: "contact_sync/result" }, 5000],
     };
     const [page, msg, every] = pages[path] || pages["/"];
     if (!refresh) {
@@ -141,18 +141,35 @@ class ContactSyncPanel extends LitElement {
 
   // A choice on the review page, saved the moment it's made. The page then shows the review as it is now.
   async _decide(kind, args) {
+    let saved = true;
     try {
       await this._call({ type: "contact_sync/decide", kind, args });
       this._showToast("Saved", false);
     } catch (err) {
+      saved = false;
       this._showToast("Couldn't save that. Try again.", true);
     }
     await this._load(true);
+    if (!saved) {
+      await this.updateComplete;
+      this._resync();
+    }
   }
 
-  _click(e, kind, args) {
-    e.currentTarget.disabled = true;
-    this._decide(kind, args);
+  // After a choice that couldn't be saved, every tick, choice and dropdown shows what's saved again. Otherwise they'd
+  // keep what was clicked, since the page drawn from the unchanged review has nothing new to set them to.
+  _resync() {
+    for (const box of this.shadowRoot.querySelectorAll("input[data-on]")) box.checked = box.dataset.on === "1";
+    for (const list of this.shadowRoot.querySelectorAll("select[data-value]")) list.value = list.dataset.value;
+  }
+
+  // The button is drawn again for whatever takes this item's place once the review is shown again, so it's enabled
+  // again after saving.
+  async _click(e, kind, args) {
+    const button = e.currentTarget;
+    button.disabled = true;
+    await this._decide(kind, args);
+    button.disabled = false;
   }
 
   _showToast(text, bad) {
@@ -368,7 +385,7 @@ class ContactSyncPanel extends LitElement {
     const card = (x) => html`<div class="item"><b>${x.person}</b><div class="scroll"><table><tbody>${x.entries.map((e) => {
       const options = (e.kind === "company" ? [["main", "Main company"]] : []).concat([["notes", "Move to Notes"], ["delete", "Delete"]]);
       return html`<tr><td>${e.text}<div class="muted">${e.current ? "Every account" : `Only in ${e.accounts.join(", ")}`}</div></td>
-        <td>${options.map(([value, text]) => html`<label class="option"><input type="radio" class="extra" name=${e.id} .checked=${e.choice === value}
+        <td>${options.map(([value, text]) => html`<label class="option"><input type="radio" class="extra" name=${e.id} .checked=${e.choice === value} data-on=${e.choice === value ? "1" : "0"}
           @change=${() => this._decide("extra", { id: e.id, choice: value })}> ${text}</label>`)}</td></tr>`;
     })}</tbody></table></div></div>`;
     const waiting = d.extras.filter((x) => !x.complete).map(card);
@@ -386,10 +403,11 @@ class ContactSyncPanel extends LitElement {
       const left = !!c.left;
       const options = c.options.map((o) => html`<label class="option">
         <input type="radio" class="pick" data-conflict=${c.id} name=${"choice-" + c.id} .checked=${c.decided && !left && o.key === c.chosen}
+          data-on=${c.decided && !left && o.key === c.chosen ? "1" : "0"}
           @change=${() => this._decide("pick", { conflict: c.id, choice: o.key, seen: c.seen, row: left ? c.row : "" })}>
         ${o.thumb ? this._thumb(o.thumb) : html`<span>${o.value}</span>`}<span class="muted">${o.accounts.join(", ")}</span>
         ${!c.decided && !left && o.key === c.chosen ? html`<span class="muted">· used unless you pick another</span>` : nothing}</label>`);
-      const leave = c.row ? html`<label class="option"><input type="radio" class="leave" data-id=${c.row} name=${"choice-" + c.id} .checked=${left}
+      const leave = c.row ? html`<label class="option"><input type="radio" class="leave" data-id=${c.row} name=${"choice-" + c.id} .checked=${left} data-on=${left ? "1" : "0"}
           @change=${() => this._decide("skip", { id: c.row, keep: false, seen: c.row_seen })}>
         <span>Leave as they are</span><span class="muted">each account keeps its own</span></label>` : nothing;
       const waits = c.required && !c.decided
@@ -409,7 +427,7 @@ class ContactSyncPanel extends LitElement {
       const said = u.groups.length ? `Joins ${u.groups.join(", ")} when you apply.` : u.decided ? "Staying in no group." : "";
       return html`<div class="item">${this._copy(u.contact, "")}<div class="row">
         ${said ? html`<span class="muted">${said}</span>` : nothing}
-        <select class="group" @change=${(e) => this._groupChosen(e, key, u.id)}>
+        <select class="group" data-value=${open ? CUSTOM : u.chosen} @change=${(e) => this._groupChosen(e, key, u.id)}>
           <option value="" .selected=${!open && !u.chosen}>Choose a group</option>
           ${d.group_choices.map((g) => html`<option .value=${g} .selected=${!open && g === u.chosen}>${g}</option>`)}
           <option value=${CUSTOM} .selected=${open}>New group…</option></select>
@@ -468,7 +486,7 @@ class ContactSyncPanel extends LitElement {
   }
 
   _row(r, columns, readonly) {
-    return html`<tr><th><label><input type="checkbox" class="skip" data-id=${r.id} .checked=${!r.skipped} ?disabled=${readonly}
+    return html`<tr><th><label><input type="checkbox" class="skip" data-id=${r.id} .checked=${!r.skipped} data-on=${r.skipped ? "0" : "1"} ?disabled=${readonly}
         @change=${(e) => this._decide("skip", { id: r.id, keep: e.target.checked, seen: r.seen || "" })}> ${r.title}</label></th>
       ${columns.map((c) => html`<td>${this._cell(r.cells[c] || [])}</td>`)}
       <td class="after">${this._after(r.after, readonly)}</td></tr>`;
@@ -493,7 +511,7 @@ class ContactSyncPanel extends LitElement {
     if (a.kind === "photo") return this._thumb(a.thumb);
     if (a.kind === "values") {
       // One box per value: unticked means every account ends up without it.
-      return a.items.map((i) => html`<label class="value"><input type="checkbox" class="skip" data-id=${i.id} .checked=${i.kept} ?disabled=${readonly}
+      return a.items.map((i) => html`<label class="value"><input type="checkbox" class="skip" data-id=${i.id} .checked=${i.kept} data-on=${i.kept ? "1" : "0"} ?disabled=${readonly}
           @change=${(e) => this._decide("skip", { id: i.id, keep: e.target.checked, seen: "" })}> ${i.text}</label>
         ${i.note ? html`<div class="muted note">${i.note}</div>` : nothing}`);
     }
@@ -501,7 +519,7 @@ class ContactSyncPanel extends LitElement {
       // Custom… opens a box for typing any label; iCloud and Google both keep custom labels as typed.
       const key = "label:" + a.id;
       const open = !readonly && !!this._open[key];
-      return html`<select class="label" ?disabled=${readonly} @change=${(e) => this._labelChosen(e, key, a)}>
+      return html`<select class="label" data-value=${open ? CUSTOM : a.chosen} ?disabled=${readonly} @change=${(e) => this._labelChosen(e, key, a)}>
           ${a.options.map(([value, text]) => html`<option .value=${value} .selected=${!open && value === a.chosen}>${text}</option>`)}
           <option value=${CUSTOM} .selected=${open}>Custom…</option></select>
         ${open ? this._typedBox(key, 40, "Label", (e) => this._saveTyped(e, key, "label", { id: a.id, seen: a.seen }, "label")) : nothing}`;

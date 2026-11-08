@@ -10,9 +10,10 @@ from typing import TYPE_CHECKING, Any
 
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import async_track_time_change
-from homeassistant.util import dt as dt_util
+from homeassistant.util import dt as dt_util, slugify
 
 from .const import (CONF_CHECK_TIME, CONF_CLIENT_ID, CONF_CLIENT_SECRET, CONF_NOTIFY, DEFAULT_CHECK_TIME, DOMAIN,
                     SIGNAL_UPDATED, SUBENTRY_GOOGLE, SUBENTRY_ICLOUD)
@@ -31,9 +32,10 @@ def fmt_time(dt: datetime) -> str:
 class ContactSync:
     """Contact Sync with the accounts and options its config entry has."""
 
-    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry, version: str) -> None:
         self.hass = hass
         self.entry = entry
+        self.version = version
         self.tz = dt_util.get_time_zone(hass.config.time_zone) or dt_util.UTC
         hour, minute, *_ = entry.options.get(CONF_CHECK_TIME, DEFAULT_CHECK_TIME).split(":")
         self.check_time = time(int(hour), int(minute))
@@ -45,6 +47,7 @@ class ContactSync:
         self.counts: dict | None = None
         self.checked_at: datetime | None = None
         self.unread: list[str] = []
+        self._issues: set[str] = set()  # the Repairs issues raised, one for each account that couldn't be read
         self._unsub_daily: Callable[[], None] | None = None
 
     @property
@@ -67,7 +70,8 @@ class ContactSync:
         await self.hass.async_add_executor_job(_forget_removed, keys, revoked)
         self._unsub_daily = async_track_time_change(self.hass, self._daily, hour=self.check_time.hour,
                                                     minute=self.check_time.minute, second=0)
-        await self.async_refresh()
+        # The review takes a moment to put together, so setup doesn't wait for it; the entities follow once it's ready.
+        self.entry.async_create_background_task(self.hass, self.async_refresh(), "contact_sync_refresh")
 
     @callback
     def async_stop(self) -> None:
@@ -148,8 +152,23 @@ class ContactSync:
         self.counts = counts
         self.checked_at = dt_util.parse_datetime(status["checked_at"]) if status.get("checked_at") else None
         self.unread = [f"{a['service']} {a['name']}" for a in status.get("accounts", []) if a["error"]]
+        self._report_unread(status)
         async_dispatcher_send(self.hass, SIGNAL_UPDATED)
         return data
+
+    @callback
+    def _report_unread(self, status: dict) -> None:
+        """A Repairs issue for each account the latest check couldn't read, gone once a check reads it. They aren't
+        kept over a restart: the first look at the review afterwards raises them again."""
+        failing = {f"account_unread_{slugify(a['service'] + ' ' + a['login'])}": a
+                   for a in status.get("accounts", []) if a["error"]}
+        for issue_id in self._issues - failing.keys():
+            ir.async_delete_issue(self.hass, DOMAIN, issue_id)
+        for issue_id, a in failing.items():
+            ir.async_create_issue(self.hass, DOMAIN, issue_id, is_fixable=False, severity=ir.IssueSeverity.WARNING,
+                                  translation_key="account_unread",
+                                  translation_placeholders={"account": f"{a['service']} {a['name']}", "error": a["error"]})
+        self._issues = set(failing)
 
     async def async_refresh(self) -> None:
         await self.async_page(lambda rv: None)
@@ -184,7 +203,9 @@ class ContactSync:
         data = review.apply_data(rv, person, self.checking)
         return data and {**data, "applying": self.applying}
 
-    def result_page(self, rv: dict | None) -> dict:
+    def result_page(self) -> dict:
+        """How far an apply has got, or what the last one did. It doesn't need the review, which isn't rebuilt each
+        time the page follows along."""
         return review.result_data(apply.load_result(), self.progress if self.applying else None, self.when)
 
     def save(self, key: str, raw: dict) -> dict:
@@ -200,6 +221,7 @@ def _check(options: dict, daily: bool) -> str:
     """A check, then what the daily notification says if this is the daily one."""
     check.run_check(options)
     review.tidy_decisions(options)
+    apply.record_start(options)
     return review.waiting_message(options) if daily and options[CONF_NOTIFY] else ""
 
 

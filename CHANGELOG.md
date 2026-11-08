@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.0b2
+
+- **Deletions after the move:** once a check finds every account in sync and nothing has been recorded yet, as just after moving from the add-on, what each account holds is recorded, the same record an apply makes. A contact or detail deleted from one account after that is deleted from the others, instead of being offered back.
+- **Sign in again** on a Google account, for when Google stops accepting its sign-in. Everything saved from the account stays. After changing the Google app, sign each Google account in again the same way.
+- **Repairs:** an account a check couldn't read is listed under **Settings → Repairs**, with what to do, until a check reads it.
+- **The review:** after answering a possible match, a duplicate or **No group**, the next one's buttons work without reloading the page, and a choice that couldn't be saved goes back to what's saved.
+- **Removing Contact Sync** deletes what it keeps about everyone's contacts and cancels each Google sign-in. The backups stay.
+- Contact Sync's device page links to its page in the sidebar and shows the version installed, and its diagnostics can be downloaded, with passwords, sign-ins, names and email addresses taken out.
+- Pages that follow a check or an apply refresh every 5 seconds, and the result page no longer puts the whole review together each time. Starting Home Assistant no longer waits for the review.
+- Changing the Google app keeps working in Home Assistant 2026.12.
+- The README lists the entities by name, since their IDs are Home Assistant's choice.
+
 ## 0.5.0b1
 
 Contact Sync is now a Home Assistant integration, installed through HACS, instead of an add-on. It does everything it did before, on its page in the sidebar. This is a test version.

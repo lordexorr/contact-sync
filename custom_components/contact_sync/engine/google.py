@@ -220,7 +220,7 @@ class GoogleContacts:
                     raise GoogleError(
                         f"Google no longer accepts this sign-in ({_error_text(resp)}). It expired or was revoked, "
                         "or the Google client ID or secret changed. Check those in Contact Sync's settings in "
-                        "Home Assistant, then remove the account and add it again."
+                        "Home Assistant, then choose Sign in again on the account."
                     )
                 raise GoogleError(f"Google refused to refresh the sign-in: {_error_text(resp)}")
             data = resp.json()

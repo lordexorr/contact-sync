@@ -2,6 +2,7 @@
 the changes are reviewed and applied on its page in the sidebar."""
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 from homeassistant.components import frontend, panel_custom
@@ -15,8 +16,8 @@ from homeassistant.helpers.typing import ConfigType
 from homeassistant.loader import async_get_integration
 
 from . import websocket
-from .const import DOMAIN, PANEL, STATIC_URL
-from .engine import settings
+from .const import DOMAIN, PANEL, STATIC_URL, SUBENTRY_GOOGLE
+from .engine import google, settings
 from .runtime import ContactSync
 from .views import ThumbView
 
@@ -39,12 +40,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ContactSyncConfigEntry) 
     # The engine's private files sit with Home Assistant's own; the snapshots and backups in a folder of their
     # own in the config folder, which the Samba share reaches.
     settings.configure(Path(hass.config.path(STORAGE_DIR, DOMAIN)), Path(hass.config.path(DOMAIN)))
-    entry.runtime_data = sync = ContactSync(hass, entry)
+    version = str((await async_get_integration(hass, DOMAIN)).version)
+    entry.runtime_data = sync = ContactSync(hass, entry, version)
     await sync.async_start()
     entry.async_on_unload(sync.async_stop)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     # The version in the panel's address makes browsers fetch it afresh after an update.
-    version = (await async_get_integration(hass, DOMAIN)).version
     await panel_custom.async_register_panel(
         hass, frontend_url_path=PANEL, webcomponent_name="contact-sync-panel", sidebar_title="Contact Sync",
         sidebar_icon="mdi:contacts", module_url=f"{STATIC_URL}/contact-sync-panel.js?v={version}", require_admin=True,
@@ -61,3 +62,19 @@ async def async_unload_entry(hass: HomeAssistant, entry: ContactSyncConfigEntry)
 
 async def _async_reload(hass: HomeAssistant, entry: ContactSyncConfigEntry) -> None:
     await hass.config_entries.async_reload(entry.entry_id)
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: ContactSyncConfigEntry) -> None:
+    """Deleting Contact Sync deletes what it keeps about everyone's contacts and cancels each Google sign-in at
+    Google. The backups made before each apply stay, in contact_sync/backups in the config folder."""
+    tokens = [s.data["refresh_token"] for s in entry.subentries.values() if s.subentry_type == SUBENTRY_GOOGLE]
+    hass.data.get(DOMAIN, {}).pop("google_tokens", None)
+    await hass.async_add_executor_job(_remove_saved, Path(hass.config.path(STORAGE_DIR, DOMAIN)),
+                                      Path(hass.config.path(DOMAIN, "snapshots")), tokens)
+
+
+def _remove_saved(private: Path, snapshots: Path, tokens: list[str]) -> None:
+    shutil.rmtree(private, ignore_errors=True)
+    shutil.rmtree(snapshots, ignore_errors=True)
+    for token in tokens:
+        google.revoke(token)

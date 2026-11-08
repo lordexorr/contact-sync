@@ -6,8 +6,8 @@ from typing import Any
 import requests
 import voluptuous as vol
 
-from homeassistant.config_entries import (ConfigEntry, ConfigFlow, ConfigFlowResult, ConfigSubentry, ConfigSubentryFlow,
-                                          OptionsFlow, SubentryFlowResult)
+from homeassistant.config_entries import (SOURCE_RECONFIGURE, ConfigEntry, ConfigFlow, ConfigFlowResult, ConfigSubentry,
+                                          ConfigSubentryFlow, OptionsFlow, SubentryFlowResult)
 from homeassistant.core import callback
 from homeassistant.helpers import selector
 
@@ -33,7 +33,8 @@ class ContactSyncConfigFlow(ConfigFlow, domain=DOMAIN):
         """The Google app: the client ID and secret every Google account signs in through."""
         entry = self._get_reconfigure_entry()
         if user_input is not None:
-            return self.async_update_reload_and_abort(entry, data_updates={
+            # The entry's update listener reloads it with the new app.
+            return self.async_update_and_abort(entry, data_updates={
                 CONF_CLIENT_ID: user_input[CONF_CLIENT_ID].strip(),
                 CONF_CLIENT_SECRET: user_input[CONF_CLIENT_SECRET].strip()})
         return self.async_show_form(step_id="reconfigure", data_schema=self.add_suggested_values_to_schema(
@@ -117,7 +118,8 @@ class ICloudAccountFlow(ConfigSubentryFlow):
 
 class GoogleAccountFlow(ConfigSubentryFlow):
     """A Google account, signed in on Google's own page through the Google app. Google then sends the browser to an
-    address nothing answers, which is pasted back here: it carries the sign-in code."""
+    address nothing answers, which is pasted back here: it carries the sign-in code. Reconfiguring it signs the same
+    account in again, for when Google stops accepting its sign-in, and keeps everything saved from it."""
 
     _attempt: dict | None = None
 
@@ -125,6 +127,9 @@ class GoogleAccountFlow(ConfigSubentryFlow):
         entry = self._get_entry()
         if not (entry.data.get(CONF_CLIENT_ID) and entry.data.get(CONF_CLIENT_SECRET)):
             return await self.async_step_app()
+        return await self.async_step_sign_in()
+
+    async def async_step_reconfigure(self, user_input: dict[str, Any] | None = None) -> SubentryFlowResult:
         return await self.async_step_sign_in()
 
     async def async_step_app(self, user_input: dict[str, Any] | None = None) -> SubentryFlowResult:
@@ -153,8 +158,23 @@ class GoogleAccountFlow(ConfigSubentryFlow):
                 errors["base"], placeholders["error"] = "cannot_connect", str(err)
             else:
                 unique_id = f"google:{account['email'].lower()}"
-                if _taken(entry, unique_id):
+                if self.source == SOURCE_RECONFIGURE:
+                    subentry = self._get_reconfigure_subentry()
+                    if subentry.unique_id == unique_id:
+                        # Its saved data stays filed under the email as first added; the old sign-in is cancelled.
+                        await self.hass.async_add_executor_job(google.revoke, subentry.data["refresh_token"])
+                        return self.async_update_and_abort(entry, subentry, data={**subentry.data,
+                                                                                  "refresh_token": account["refresh_token"]})
+                    await self.hass.async_add_executor_job(google.revoke, account["refresh_token"])
+                    errors["base"], placeholders["error"] = "refused", (
+                        f"That signed in as {account['email']}. Sign in as {subentry.data['email']}, or add "
+                        f"{account['email']} as another account.")
+                    self._attempt = google.start_sign_in(client_id)  # a code works once, so this sign-in starts over
+                    placeholders["url"] = self._attempt["url"]
+                elif _taken(entry, unique_id):
+                    await self.hass.async_add_executor_job(google.revoke, account["refresh_token"])
                     return self.async_abort(reason="already_configured")
-                return self.async_create_entry(title=account["email"], data=account, unique_id=unique_id)
+                else:
+                    return self.async_create_entry(title=account["email"], data=account, unique_id=unique_id)
         return self.async_show_form(step_id="sign_in", errors=errors, description_placeholders=placeholders,
                                     data_schema=vol.Schema({vol.Required("url"): str}))

@@ -7,7 +7,7 @@
       },
       "reconfigure": {
         "title": "Google app",
-        "description": "The app registered in your Google Cloud project, which every Google account signs in through. Its sign-ins belong to the app, so after changing it, remove each Google account and add it again.",
+        "description": "The app registered in your Google Cloud project, which every Google account signs in through. Its sign-ins belong to the app, so after changing it, choose **Sign in again** on each Google account.",
         "data": {
           "client_id": "Client ID",
           "client_secret": "Client secret"
@@ -77,7 +77,8 @@
     },
     "google": {
       "initiate_flow": {
-        "user": "Add Google account"
+        "user": "Add Google account",
+        "reconfigure": "Sign in again"
       },
       "entry_type": "Google account",
       "step": {
@@ -104,6 +105,12 @@
       "abort": {
         "already_configured": "That Google account is already added."
       }
+    }
+  },
+  "issues": {
+    "account_unread": {
+      "title": "Contact Sync couldn't read {account}",
+      "description": "The latest check couldn't read {account}: {error}\n\nIt's left out of the review, and applying changes only the other accounts until it can be read again. If its password or sign-in changed, go to **Settings → Devices & services → Contact Sync** and choose **Change label or password** on the iCloud account, or **Sign in again** on the Google account, then check again. This goes away once a check reads it."
     }
   },
   "entity": {

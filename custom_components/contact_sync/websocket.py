@@ -179,4 +179,4 @@ async def ws_apply(hass: HomeAssistant, connection: websocket_api.ActiveConnecti
 @websocket_api.async_response
 async def ws_result(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
     if sync := _sync(hass, connection, msg):
-        _send(hass, connection, msg, await sync.async_page(sync.result_page))
+        _send(hass, connection, msg, await sync.async_run(sync.result_page))
