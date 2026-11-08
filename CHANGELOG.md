@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.1
+
+- **An icon:** Contact Sync has its own icon in Home Assistant, in place of the blank placeholder.
+
 ## 0.5.0
 
 Contact Sync is now a Home Assistant integration, installed through the Marketplace, instead of an add-on. It does everything it did before, on its page in the sidebar.
